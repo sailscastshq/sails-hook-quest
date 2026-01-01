@@ -1,12 +1,54 @@
 {
-  "name": "sails-hook-scheduler",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "name": "sails-hook-quest",
+  "version": "0.0.0",
+  "description": "Seamlessly schedule jobs in your Sails applications.",
+  "main": "lib/index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "lint": "prettier --check .",
+    "lint:fix": "prettier --write .",
+    "prepare": "husky"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC"
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/sailscastshq/sails-hook-quest.git"
+  },
+  "bugs": "https://github.com/sailscastshq/sails-hook-quest/issues",
+  "keywords": [
+    "sails",
+    "sails.js",
+    "hook",
+    "scheduler",
+    "task automation",
+    "scheduling",
+    "automated tasks",
+    "task management",
+    "dynamic scheduling",
+    "Sails.js scripts",
+    "Bree",
+    "Sails jobs",
+    "Sails.js jobs",
+    "Sails scripts"
+  ],
+  "author": "Kelvin Omereshone <kelvin@sailscasts.com>",
+  "license": "MIT",
+  "sails": {
+    "isHook": true,
+    "hookName": "quest"
+  },
+  "lint-staged": {
+    "**/*": "prettier --write --ignore-unknown"
+  },
+  "dependencies": {
+    "@sailshq/lodash": "^3.10.6",
+    "bree": "^9.2.4",
+    "include-all": "^4.0.3",
+    "machine": "^15.2.3"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^19.5.0",
+    "@commitlint/config-conventional": "^19.5.0",
+    "husky": "^9.1.6",
+    "lint-staged": "^15.2.10",
+    "prettier": "^3.3.3"
+  }
 }
