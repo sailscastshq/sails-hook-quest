@@ -1,0 +1,57 @@
+{
+  "name": "sails-hook-quest",
+  "version": "0.0.1",
+  "description": "Elegant job scheduling for Sails.js applications with human-readable intervals, cron expressions, and full Sails context",
+  "main": "lib/index.js",
+  "scripts": {
+    "lint": "prettier --check .",
+    "lint:fix": "prettier --write .",
+    "prepare": "husky"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/sailscastshq/sails-hook-quest.git"
+  },
+  "bugs": "https://github.com/sailscastshq/sails-hook-quest/issues",
+  "keywords": [
+    "sails",
+    "sails.js",
+    "sailsjs",
+    "hook",
+    "sails-hook",
+    "scheduler",
+    "job-scheduler",
+    "cron",
+    "cron-jobs",
+    "task-scheduler",
+    "background-jobs",
+    "job-queue",
+    "automated-tasks",
+    "scheduled-tasks",
+    "human-readable",
+    "sails-scripts"
+  ],
+  "author": "Kelvin Omereshone <kelvin@sailscasts.com>",
+  "license": "MIT",
+  "sails": {
+    "isHook": true,
+    "hookName": "quest"
+  },
+  "lint-staged": {
+    "**/*": "prettier --write --ignore-unknown"
+  },
+  "dependencies": {
+    "@breejs/later": "^4.2.0",
+    "@sailshq/lodash": "^3.10.6",
+    "cron-parser": "^5.4.0",
+    "human-interval": "^2.0.1",
+    "include-all": "^4.0.3"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^19.5.0",
+    "@commitlint/config-conventional": "^19.5.0",
+    "husky": "^9.1.6",
+    "lint-staged": "^15.2.10",
+    "prettier": "^3.3.3"
+  }
+}
