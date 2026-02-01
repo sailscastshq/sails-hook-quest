@@ -1,6 +1,6 @@
 {
   "name": "sails-hook-quest",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Elegant job scheduling for Sails.js applications with human-readable intervals, cron expressions, and full Sails context",
   "main": "lib/index.js",
   "scripts": {
