@@ -1,14 +1,29 @@
-const assert = require('node:assert/strict')
 const { EventEmitter } = require('node:events')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const { Writable } = require('node:stream')
-const test = require('node:test')
+const { createRuntime, createTestApi } = require('sounding')
 
 const { createDiagnosticTail, executeJob } = require('../lib/core/executor')
 
-test('failed jobs keep live output and emit bounded diagnostics', async (t) => {
+const sails = new EventEmitter()
+sails.config = {
+  appPath: process.cwd(),
+  environment: 'test',
+  datastores: {}
+}
+sails.hooks = {}
+sails.helpers = {}
+sails.models = {}
+sails.log = { info() {}, warn() {}, error() {}, verbose() {} }
+
+const test = createTestApi({ runtime: createRuntime(sails) })
+
+test('failed jobs keep live output and emit bounded diagnostics', async ({
+  expect,
+  t
+}) => {
   const appPath = fs.mkdtempSync(path.join(os.tmpdir(), 'quest-diagnostics-'))
   const scriptsPath = path.join(appPath, 'scripts')
   const runnerPath = path.join(appPath, 'fake-sails')
@@ -26,8 +41,6 @@ test('failed jobs keep live output and emit bounded diagnostics', async (t) => {
   fs.chmodSync(runnerPath, 0o755)
 
   const previousSails = global.sails
-  const sails = new EventEmitter()
-  sails.log = { info() {}, warn() {}, error() {}, verbose() {} }
   global.sails = sails
 
   let liveOutput = ''
@@ -46,8 +59,9 @@ test('failed jobs keep live output and emit bounded diagnostics', async (t) => {
     fs.rmSync(appPath, { recursive: true, force: true })
   })
 
-  await assert.rejects(
-    executeJob(
+  let executionError
+  try {
+    await executeJob(
       'send-issue-notifications',
       { name: 'send-issue-notifications' },
       {},
@@ -56,22 +70,26 @@ test('failed jobs keep live output and emit bounded diagnostics', async (t) => {
         stdout: output,
         stderr: output
       }
-    ),
-    /exited with code 1/
-  )
+    )
+  } catch (error) {
+    executionError = error
+  }
 
   const event = await failure
-  assert.match(liveOutput, /Preparing notifications/)
-  assert.match(liveOutput, /database exploded/)
-  assert.match(event.error.diagnostic, /sendIssueNotifications/)
-  assert.match(event.error.stack, /executor\.js/)
+  expect(executionError.message).toContain('exited with code 1')
+  expect(liveOutput).toContain('Preparing notifications')
+  expect(liveOutput).toContain('database exploded')
+  expect(event.error.diagnostic).toContain('sendIssueNotifications')
+  expect(event.error.stack).toContain('executor.js')
 })
 
-test('diagnostic tails discard old output at the configured byte limit', () => {
+test('diagnostic tails discard old output at the configured byte limit', ({
+  expect
+}) => {
   const tail = createDiagnosticTail(12)
   tail.append('discard-this-')
   tail.append('keep-this')
 
-  assert.equal(Buffer.byteLength(tail.value()), 12)
-  assert.equal(tail.value(), 'is-keep-this')
+  expect(Buffer.byteLength(tail.value())).toBe(12)
+  expect(tail.value()).toBe('is-keep-this')
 })

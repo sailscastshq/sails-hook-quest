@@ -4,7 +4,7 @@
   "description": "Elegant job scheduling for Sails.js applications with human-readable intervals, cron expressions, and full Sails context",
   "main": "lib/index.js",
   "scripts": {
-    "test": "node --test test/*.test.js",
+    "test": "sounding test",
     "lint": "prettier --check .",
     "lint:fix": "prettier --write .",
     "typecheck": "tsc -p jsconfig.json --noEmit",
@@ -56,6 +56,7 @@
     "husky": "^9.1.6",
     "lint-staged": "^15.2.10",
     "prettier": "^3.3.3",
+    "sounding": "^0.2.0",
     "typescript": "^5.6.2"
   }
 }
