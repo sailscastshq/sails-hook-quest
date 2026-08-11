@@ -79,6 +79,9 @@ module.exports.quest = {
   // Run jobs in console environment (minimal Sails lift)
   environment: 'console',
 
+  // Retain the final 64 KiB of child output when a job fails
+  diagnosticTailBytes: 64 * 1024,
+
   // Define additional jobs in config
   jobs: [
     {
@@ -215,9 +218,19 @@ Each event includes:
   inputs: { /* job inputs */ },
   timestamp: Date,
   duration: 1234,  // milliseconds (complete/error only)
-  error: { }       // error details (error event only)
+  error: {
+    message: 'Job "job-name" exited with code 1',
+    code: 1,
+    stack: 'Error: Job "job-name" exited with code 1\\n...',
+    diagnostic: 'The final bounded section of the child process output'
+  }
 }
 ```
+
+Job output still streams live to the parent process. On failure, Quest also
+includes a bounded diagnostic tail and a parent stack in the error event so
+observability tools can preserve the useful failure context without buffering
+the complete job log.
 
 ## Console Environment
 
