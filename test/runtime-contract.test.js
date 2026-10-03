@@ -789,7 +789,6 @@ test('autoStart source schedules belong only to the resident, never to its CLI j
       (error) => (error ? reject(error) : resolve())
     )
   )
-  await new Promise((resolve) => setImmediate(resolve)) // Quest's async ORM-after initialization publishes its API on a later microtask.
   assert.equal(app.config.quest.autoStart, true)
   assert.equal(app.quest.metadata('fixture').scheduled, true)
   assert.equal(app.quest.metadata('sentinel').scheduled, true)
@@ -1146,4 +1145,108 @@ test('actual owned CLI child reports observed signal termination without cancell
   assert.equal(failures[0].error.code, null)
   assert.equal(f.context.running.size, 0)
   assert.equal(f.context.runtime.active.size, 0)
+})
+
+function nativeLiftFixture(t, config) {
+  const f = fixture(
+    t,
+    `module.exports={friendlyName:'Lift ready fixture',quest:{interval:100000},fn:async()=>true}`
+  )
+  fs.writeFileSync(
+    path.join(f.appPath, 'package.json'),
+    JSON.stringify({
+      name: 'quest-full-lift-fixture',
+      dependencies: { 'sails-hook-orm': '^4.0.3' }
+    })
+  )
+  for (const [name, source] of Object.entries({
+    quest: `module.exports=require(${JSON.stringify(path.resolve('lib'))})`,
+    integration: `module.exports=sails=>({initialize(done){sails.once('ready',()=>{sails.integrationQuestRuntime=sails.quest?.getRuntime();sails.integrationQuestSchedule=sails.quest?.metadata('fixture')});done()}})`,
+    probe: `module.exports=()=>({marker:'discovered',initialize:done=>done()})`
+  })) {
+    const dir = path.join(f.appPath, 'api', 'hooks', name)
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'index.js'), source)
+  }
+  return {
+    f,
+    config: {
+      appPath: f.appPath,
+      environment: 'test',
+      host: '127.0.0.1',
+      port: '0', // A truthy override preserves the OS-assigned port through Sails config loading.
+      globals: false,
+      log: { level: 'silent', noShip: true },
+      hooks: { grunt: false, session: false, sockets: false },
+      quest: config
+    }
+  }
+}
+
+test('full native Sails lift exposes Quest in ready and lift callback without a delay', async ({
+  t
+}) => {
+  const { config } = nativeLiftFixture(t, { autoStart: true })
+  const app = new (require('sails').Sails)()
+  const order = []
+  app.once('hook:orm:loaded', () => order.push('orm'))
+  app.once('hook:quest:loaded', () => {
+    order.push('quest')
+    assert.ok(app.quest.getRuntime().runtimeId)
+    assert.equal(app.quest.metadata('fixture').scheduled, true)
+  })
+  t.after(async () => {
+    app.quest?.stop()
+    await new Promise((resolve) => app.lower(resolve))
+  })
+  await new Promise((resolve, reject) =>
+    app.lift(config, (error) => {
+      if (error) return reject(error)
+      try {
+        assert.ok(app.quest.getRuntime().runtimeId)
+        assert.equal(app.quest.metadata('fixture').scheduled, true)
+        assert.ok(app.quest.metadata('fixture').nextRunAt)
+        assert.equal(
+          app.integrationQuestRuntime.runtimeId,
+          app.quest.getRuntime().runtimeId
+        )
+        assert.equal(app.integrationQuestSchedule.scheduled, true)
+        assert.ok(app.hooks.orm)
+        assert.ok(app.hooks.integration)
+        assert.equal(app.hooks.probe.marker, 'discovered')
+        assert.ok(app.hooks.http.server.address().port > 0)
+        assert.deepEqual(order, ['orm', 'quest'])
+        resolve()
+      } catch (error) {
+        reject(error)
+      }
+    })
+  )
+})
+
+test('full native Sails lift propagates Quest initialization failure without publishing a partial API', async ({
+  t
+}) => {
+  const { config } = nativeLiftFixture(t, {
+    autoStart: true,
+    jobs: [{ name: 'duplicate' }, { name: 'duplicate' }]
+  })
+  const app = new (require('sails').Sails)()
+  let ready = false,
+    questLoaded = false
+  app.once('ready', () => {
+    ready = true
+  })
+  app.once('hook:quest:loaded', () => {
+    questLoaded = true
+  })
+  await assert.rejects(
+    new Promise((resolve, reject) =>
+      app.lift(config, (error) => (error ? reject(error) : resolve()))
+    ),
+    /Duplicate job name/
+  )
+  assert.equal(ready, false)
+  assert.equal(questLoaded, false)
+  assert.equal(app.quest, undefined)
 })
