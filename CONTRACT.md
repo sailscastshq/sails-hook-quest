@@ -10,6 +10,8 @@ This is the local implementation for upstream issue [#13](https://github.com/sai
 
 The input schema contains safe JSON constraints, defaults, and examples. Functions are omitted; `customValidation` indicates a custom rule without executing it. Protected/sensitive fields and credential-like names omit defaults/examples. Schema metadata is descriptive, not a substitute for machine validation.
 
+Config aliases use `{name: 'index-from-config', script: 'rebuild-search-index', interval: 10000, inputs: {count: 3}}`. Their schema/defaults come from the original script; events, schedules and overlap guards use the alias's job name. Two aliases intentionally have separate per-job guards, not a script-wide lock.
+
 `scheduledInputs` is separate from schema and manual overrides:
 
 ```js
@@ -29,7 +31,7 @@ These are raw effective scheduled values under the existing precedence `job.inpu
 
 ## Execution and events
 
-The existing signature remains `await sails.quest.run('job-name', inputs)` and returns a receipt array. Multiple names and omitted names retain their existing behavior. Admission checks pause/overlap, validates bounded JSON input and loaded machine schemas without executing business logic, and starts the owned `sails run` child. The child's installed Sails/whelk machine runner also validates before invoking the script, using exact typed input through a dedicated pipe. Actual machine output, including named exits, crosses another pipe; stdout is never parsed as a result.
+The existing signature remains `await sails.quest.run('job-name', inputs)` and returns a receipt array. Multiple names and omitted names retain their existing behavior. Admission checks pause/overlap, validates bounded JSON input and loaded machine schemas without executing business logic, and starts the owned `sails run` child. For source-loaded registered jobs, required/type/custom/unknown-key failures reject before the synchronous start event and before any child is spawned. Ad-hoc scripts or dynamically added jobs lacking loaded schema retain child-side validation; they must not be advertised as supporting full preflight admission. The child's installed Sails/whelk machine runner also validates before invoking the script, using exact typed input through a dedicated pipe. Actual machine output, including named exits, crosses another pipe; stdout is never parsed as a result.
 
 Subscribe to `quest:job:start` before calling `run` to capture the synchronous admission run ID before the child starts. Existing start/complete/error event names and payload fields remain. They gain `runId`, `runtimeId`, `sequence`, and `startedAt`; terminal events gain `finishedAt`. Sequence increases across this resident runtime. Skips have a new `quest:job:skip` event and an identified receipt. Admission/validation failures reject without spawning and emit an error with `phase: 'validation'`; they have no start event.
 

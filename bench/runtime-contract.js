@@ -85,6 +85,8 @@ async function run(executor, mode) {
       mode,
       baselineMedianMs: median(old),
       currentMedianMs: median(next),
+      baselineSamplesMs: old,
+      currentSamplesMs: next,
       changePercent: (median(next) / median(old) - 1) * 100
     })
   }

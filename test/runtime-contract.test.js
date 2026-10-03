@@ -136,6 +136,18 @@ test('input admission validation starts no child or business work', async ({
     t,
     `module.exports={friendlyName:'Validation fixture',habitat:'none',inputs:{email:{type:'string',required:true,isEmail:true},count:{type:'number',custom:v=>v===0},payload:{type:'json'}},fn:async()=>{require('fs').writeFileSync('business-ran','yes');return true}}`
   )
+  const app = new EventEmitter()
+  app.log = { error() {} }
+  const starts = []
+  app.on('quest:job:start', (event) => starts.push(event))
+  f.context.sails = app
+  const runner = path.join(f.appPath, 'spawn-marker')
+  fs.writeFileSync(
+    runner,
+    "#!/usr/bin/env node\nrequire('fs').writeFileSync('child-spawned','yes');process.exit(0)\n"
+  )
+  fs.chmodSync(runner, 0o755)
+  f.context.config.sailsPath = runner
   for (const inputs of [
     {},
     { email: 'invalid' },
@@ -146,6 +158,9 @@ test('input admission validation starts no child or business work', async ({
     await assert.rejects(f.run(inputs))
   assert.equal(fs.existsSync(path.join(f.appPath, 'business-ran')), false)
   assert.equal(f.context.running.size, 0)
+  assert.equal(starts.length, 0)
+  assert.equal(fs.existsSync(path.join(f.appPath, 'child-spawned')), false)
+  delete f.context.config.sailsPath
   const receipt = await f.run({
     email: 'ok@example.com',
     count: 0,
@@ -611,4 +626,55 @@ test('failed lifecycle listeners cannot strand resident running state', async ({
   assert.equal(receipt.result.value, 0)
   assert.equal(f.context.running.size, 0)
   assert.equal(f.context.runtime.active.size, 0)
+})
+
+test('config aliases keep original script/schema, source schedule, and per-job overlap authority', async ({
+  t
+}) => {
+  const f = fixture(
+    t,
+    `module.exports={friendlyName:'Config alias fixture',habitat:'none',inputs:{count:{type:'number',required:true},delay:{type:'number',defaultsTo:100}},fn:async({count,delay})=>{await new Promise(resolve=>setTimeout(resolve,delay));return {count}}}`
+  )
+  const config = {
+    appPath: f.appPath,
+    withoutOverlapping: true,
+    jobs: [
+      {
+        name: 'index-from-config',
+        script: 'fixture',
+        interval: 10000,
+        inputs: { count: 3 }
+      }
+    ]
+  }
+  const jobs = await loader.loadJobs(config)
+  const job = jobs.get('index-from-config')
+  assert.equal(job.script, 'fixture')
+  assert.equal(job.inputSchema.count.required, true)
+  assert.equal(job.interval, 10000)
+  assert.equal(job.withoutOverlapping, true)
+  const pending = executeJob(job.name, job, {}, f.context)
+  assert.equal(
+    (await executeJob(job.name, job, {}, f.context)).reason,
+    'already_running'
+  )
+  const receipt = await pending
+  assert.deepEqual(receipt.result.value, { count: 3 })
+  const context = {
+    jobs,
+    timers: new Map(),
+    dueTimes: new Map(),
+    runtime: f.context.runtime,
+    config,
+    getNextRunTime: () => new Date(Date.now() + 10000),
+    executeJob: () => Promise.resolve({ success: true, duration: 0 })
+  }
+  control.scheduleJob(job.name, context)
+  t.after(() => control.stopJobs(job.name, context))
+  const meta = resident.metadata(context, job.name)
+  assert.equal(meta.script, 'fixture')
+  assert.equal(meta.scheduled, true)
+  assert.ok(meta.nextRunAt)
+  assert.equal(meta.scheduledInputs.values.count, 3)
+  assert.equal(meta.scheduledInputs.fields.count.source, 'job_input')
 })
