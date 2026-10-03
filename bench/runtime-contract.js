@@ -52,7 +52,16 @@ async function run(executor, mode) {
   try {
     await executor.executeJob(
       mode === 'resident' ? 'resident' : 'fixture',
-      { name: 'fixture' },
+      {
+        name: 'fixture',
+        inputSchema: require(
+          path.join(
+            appPath,
+            'scripts',
+            mode === 'resident' ? 'resident.js' : 'fixture.js'
+          )
+        ).inputs
+      },
       { mode },
       { config: { appPath }, stdout: sink, stderr: sink }
     )

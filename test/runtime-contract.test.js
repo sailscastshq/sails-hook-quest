@@ -154,8 +154,16 @@ test('input admission validation starts no child or business work', async ({
     { email: 'ok@example.com', count: 2 },
     { email: 'ok@example.com', unknown: true },
     { email: 'ok@example.com', payload: 'x'.repeat(100000) }
-  ])
-    await assert.rejects(f.run(inputs))
+  ]) {
+    const pending = f.run(inputs)
+    assert.ok(pending instanceof Promise)
+    await assert.rejects(pending, (error) => {
+      assert.equal(error.code, 'E_QUEST_ADMISSION_REJECTED')
+      assert.equal(error.admission, 'rejected_before_start')
+      assert.equal(error.phase, 'validation')
+      return true
+    })
+  }
   assert.equal(fs.existsSync(path.join(f.appPath, 'business-ran')), false)
   assert.equal(f.context.running.size, 0)
   assert.equal(starts.length, 0)
@@ -457,6 +465,15 @@ test('actual resident Sails app owns scheduling, manual admission, pause and met
   app.quest.pause('resident')
   assert.equal((await app.quest.run('resident'))[0].reason, 'paused')
   app.quest.resume('resident')
+  const invalid = app.quest.run('resident', { wait: 'not-a-number' })
+  assert.ok(invalid instanceof Promise)
+  await assert.rejects(
+    invalid,
+    (error) =>
+      error.code === 'E_QUEST_ADMISSION_REJECTED' &&
+      error.validationCode === 'E_INVALID_ARGINS'
+  )
+  assert.equal(starts.length, 0)
   const pending = app.quest.run('resident', { wait: 400 })
   assert.equal(starts.length, 1)
   assert.equal(app.quest.metadata('resident').runningCount, 1)
