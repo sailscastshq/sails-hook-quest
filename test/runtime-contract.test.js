@@ -886,3 +886,215 @@ test('metadata distinguishes loaded empty schema from unloaded dynamic definitio
   )
   assert.equal(receipt.result.value, true)
 })
+
+test('resident metadata retains bounded malformed schedule diagnostics and honest registration state', async ({
+  t
+}) => {
+  const f = fixture(
+    t,
+    `module.exports={friendlyName:'Schedule diagnostics',habitat:'none',fn:async()=>{throw new Error('must not execute')}}`
+  )
+  const definitions = [
+    { name: 'bad-cron', cron: 'not a cron' },
+    { name: 'bad-interval', interval: 'not an interval' },
+    { name: 'bad-date', date: 'not a date' },
+    { name: 'bad-timeout', timeout: 'not a timeout' },
+    { name: 'expired', date: '2000-01-01T00:00:00Z' },
+    { name: 'unscheduled' },
+    { name: 'relative', interval: 100000, date: '2100-01-01' },
+    { name: 'one-shot', timeout: 100000 },
+    {
+      name: 'override',
+      cron: '0 9 * * *',
+      timezone: 'UTC',
+      cronOptions: { tz: 'America/New_York' }
+    },
+    { name: 'conflict', date: '2100-01-01', timeout: 100000 }
+  ].map((job) => ({ ...job, script: 'fixture' }))
+  const app = new (require('sails').Sails)()
+  const previous = global.sails
+  const starts = []
+  app.on('quest:job:start', (event) => starts.push(event))
+  t.after(async () => {
+    app.quest?.stop()
+    await new Promise((resolve) => app.lower(resolve))
+    global.sails = previous
+  })
+  await new Promise((resolve, reject) =>
+    app.load(
+      {
+        appPath: f.appPath,
+        environment: 'console',
+        log: { level: 'silent' },
+        hooks: {
+          quest: defineHook,
+          orm: require('sails-hook-orm'),
+          grunt: false
+        },
+        quest: { autoStart: false, jobs: definitions },
+        globals: { sails: true, _: false, async: false, models: false }
+      },
+      (error) => (error ? reject(error) : resolve())
+    )
+  )
+  const metadata = (name) => app.quest.metadata(name)
+  assert.equal(app.quest.getRuntime().capabilities.scheduleDiagnostics, true)
+  assert.equal(metadata('bad-cron').scheduleState.validation, 'not_checked')
+  assert.equal(metadata('bad-cron').scheduleState.registration, 'not_attempted')
+  for (const [name, code] of [
+    ['bad-cron', 'CRON'],
+    ['bad-interval', 'INTERVAL'],
+    ['bad-date', 'DATE'],
+    ['bad-timeout', 'TIMEOUT']
+  ]) {
+    await app.quest.start(name)
+    const meta = metadata(name)
+    assert.equal(meta.scheduled, false)
+    assert.equal(meta.nextRunAt, null)
+    assert.equal(meta.scheduleState.registration, 'not_registered')
+    assert.equal(meta.scheduleState.validation, 'invalid')
+    assert.equal(meta.scheduleState.validationErrors.length, 1)
+    assert.equal(
+      meta.scheduleState.validationErrors[0].code,
+      `E_SCHEDULE_${code}`
+    )
+    assert.ok(JSON.stringify(meta.scheduleState.validationErrors).length < 256)
+    meta.scheduleState.validationErrors[0].code = 'mutated'
+    assert.equal(
+      metadata(name).scheduleState.validationErrors[0].code,
+      `E_SCHEDULE_${code}`
+    )
+    app.quest.stop(name)
+    assert.equal(metadata(name).scheduleState.registration, 'stopped')
+    assert.equal(metadata(name).scheduleState.validation, 'invalid')
+  }
+  await app.quest.start([
+    'expired',
+    'unscheduled',
+    'relative',
+    'one-shot',
+    'override'
+  ])
+  assert.equal(metadata('expired').scheduleState.validation, 'valid')
+  assert.equal(metadata('expired').scheduleState.reason, 'no_future_run')
+  assert.equal(metadata('unscheduled').scheduleState.validation, 'not_checked')
+  assert.equal(metadata('unscheduled').scheduleState.reason, 'no_schedule')
+  const relative = metadata('relative')
+  assert.equal(relative.scheduleState.registration, 'registered')
+  assert.equal(relative.scheduleState.validation, 'valid')
+  assert.equal(
+    relative.scheduleState.restart.timing,
+    'relative_to_registration'
+  )
+  assert.equal(relative.scheduleState.restart.persistence, 'memory_only')
+  assert.equal(relative.scheduleState.restart.missedRuns, 'not_replayed')
+  assert.equal(metadata('one-shot').scheduleState.restart.oneShot, true)
+  assert.equal(metadata('override').schedule.timezone, 'America/New_York')
+  assert.equal(metadata('override').scheduleState.restart.timing, 'wall_clock')
+  await assert.rejects(app.quest.start('conflict'), /Cannot combine/)
+  assert.equal(metadata('conflict').scheduleState.registration, 'failed')
+  assert.equal(
+    metadata('conflict').scheduleState.validationErrors[0].code,
+    'E_SCHEDULE_CONFLICT'
+  )
+  for (let i = 0; i < 10; i++) app.quest.metadata()
+  assert.equal(starts.length, 0)
+  app.quest.stop('relative')
+  assert.equal(metadata('relative').scheduleState.validation, 'valid')
+  assert.equal(metadata('relative').scheduleState.registration, 'stopped')
+  assert.equal(metadata('relative').nextRunAt, null)
+})
+
+test('unsafe schedule values register no timers or executions, and cron override follows DST', async () => {
+  const scheduler = require('../lib/core/scheduler')
+  const context = {
+    jobs: new Map(),
+    timers: new Map(),
+    dueTimes: new Map(),
+    scheduleStates: new Map(),
+    executeJob: async () => {
+      throw new Error('unsafe admission')
+    }
+  }
+  let executions = 0
+  context.executeJob = async () => {
+    executions++
+    return { success: true, duration: 0 }
+  }
+  context.getNextRunTime = (job) =>
+    scheduler.getNextRunTime(job, {}, (assessment) =>
+      context.scheduleStates.set(job.name, {
+        ...context.scheduleStates.get(job.name),
+        ...assessment
+      })
+    )
+  for (const value of [
+    -1,
+    0,
+    NaN,
+    Infinity,
+    -Infinity,
+    Number.MAX_VALUE,
+    '-1 second',
+    {},
+    0.1
+  ]) {
+    context.jobs.set('unsafe', { name: 'unsafe', interval: value })
+    control.scheduleJob('unsafe', context)
+    assert.equal(context.timers.size, 0)
+    assert.equal(context.dueTimes.size, 0)
+    assert.equal(context.scheduleStates.get('unsafe').validation, 'invalid')
+  }
+  for (const definition of [
+    { timeout: NaN },
+    { timeout: Infinity },
+    { timeout: -1 },
+    { date: new Date(NaN) },
+    { date: {} },
+    { date: NaN }
+  ]) {
+    context.jobs.set('unsafe', { name: 'unsafe', ...definition })
+    control.scheduleJob('unsafe', context)
+    assert.equal(context.scheduleStates.get('unsafe').validation, 'invalid')
+    assert.equal(context.timers.size, 0)
+  }
+  context.jobs.set('unsafe', { name: 'unsafe', timeout: 0 })
+  control.scheduleJob('unsafe', context)
+  assert.equal(executions, 1)
+  assert.equal(context.scheduleStates.get('unsafe').registration, 'consumed')
+  assert.equal(context.scheduleStates.get('unsafe').validation, 'valid')
+  assert.equal(context.timers.size, 0)
+  const job = {
+    name: 'dst',
+    cron: '0 9 * * *',
+    timezone: 'UTC',
+    cronOptions: { tz: 'America/New_York', currentDate: '2026-03-07T15:00:00Z' }
+  }
+  assert.equal(
+    scheduler.getNextRunTime(job).toISOString(),
+    '2026-03-08T13:00:00.000Z'
+  )
+  job.cronOptions.currentDate = '2026-03-06T15:00:00Z'
+  assert.equal(
+    scheduler.getNextRunTime(job).toISOString(),
+    '2026-03-07T14:00:00.000Z'
+  )
+  job.cronOptions.tz = 'UTC'
+  assert.equal(
+    scheduler.getNextRunTime(job).toISOString(),
+    '2026-03-07T09:00:00.000Z'
+  )
+  let assessment
+  scheduler.getNextRunTime(
+    {
+      ...job,
+      cronOptions: { currentDate: '2026-03-07', endDate: '2026-03-07' }
+    },
+    {},
+    (value) => {
+      assessment = value
+    }
+  )
+  assert.equal(assessment.validation, 'valid')
+  assert.equal(assessment.reason, 'no_future_run')
+})

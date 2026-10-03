@@ -10,6 +10,32 @@ This is the local implementation for upstream issue [#13](https://github.com/sai
 
 The input schema contains safe JSON constraints, defaults, and examples. Functions are omitted; `customValidation` indicates a custom rule without executing it. Protected/sensitive fields and credential-like names omit defaults/examples. Schema metadata is descriptive, not a substitute for machine validation. `inputMetadataAvailable` is true for source-loaded schemas, including a genuinely empty schema, and false for dynamically added/unloaded definitions without one. In the latter case `inputs: {}` does not claim that the script takes no inputs or supports preflight; typed invocation consumers must gate on the per-job flag. Loaded empty schemas still reject unknown supplied inputs before spawning.
 
+`getRuntime().capabilities.scheduleDiagnostics` signals parser-backed schedule assessments. Each job's additive `scheduleState` is:
+
+```js
+{
+  registration: 'not_attempted', // registered | not_registered | stopped | consumed | failed
+  validation: 'not_checked', // valid | invalid
+  validationErrors: [], // at most one {code, message}, fixed messages under 256 bytes total
+  reason: null, // no_schedule | no_future_run
+  lastAttemptAt: null, // ISO timestamp of last registration attempt
+  restart: {
+    persistence: 'memory_only',
+    timing: 'relative_to_registration', // wall_clock | none
+    oneShot: false,
+    missedRuns: 'not_replayed'
+  }
+}
+```
+
+Assessments are recorded during registration, not invented by metadata reads. `not_checked` with an empty error list does not mean valid. Stopping or consuming a timer retains the last validation assessment; a missing timer alone never means invalid. A valid past date or exhausted cron range reports `valid` with `no_future_run`. No schedule reports `not_checked` with `no_schedule`. Invalid registrations return no timer with one of `E_SCHEDULE_CRON`, `E_SCHEDULE_INTERVAL`, `E_SCHEDULE_TIMEOUT`, or `E_SCHEDULE_DATE`; the existing date/timeout conflict still rejects `start()` and records `E_SCHEDULE_CONFLICT`. Errors use fixed messages without raw parser output. Parser validation concerns schedules only: it does not validate scheduled business inputs or prevent an independent manual run.
+
+Numeric intervals must be finite, strictly positive, and produce a finite future date. Invalid, zero, negative, infinite, or out-of-range recurring intervals now register no timer instead of risking immediate recursion or an overflow timer. Numeric timeouts must be finite and nonnegative; zero remains an immediate one-shot. Invalid date objects and unsupported date/timeout values register no timer. These are intentional safety changes for malformed configurations. Existing valid schedules, source ownership, overlap guards, pause behavior and manual invocation remain.
+
+Intervals and delay timeouts start their relative clock on each registration, including resident restart. Cron, absolute dates and supported wall-clock text schedules keep wall-clock semantics. A one-shot delay may run again after restart when source `autoStart` registers it anew; it is not persisted as consumed. Expired absolute dates do not replay. Scheduling, pause, registration diagnostics and consumed state are memory-only. `nextRunAt` always comes from an actual registered timer, including long-delay intermediate timers.
+
+For cron jobs, `schedule.timezone` reports the effective parser timezone: explicit `cronOptions.tz` overrides the job timezone, then hook timezone. An explicit empty/undefined `tz` override or missing timezone is `null`, meaning the parser's local default. `cronOptions` is preserved as bounded source metadata. `cronOptions.timezone` is not a recognized override. DST follows cron-parser in the effective zone; consumers must use the resident's registered `nextRunAt`, rather than calculate another schedule.
+
 Config aliases use `{name: 'index-from-config', script: 'rebuild-search-index', interval: 10000, inputs: {count: 3}}`. Their schema/defaults come from the original script; events, schedules and overlap guards use the alias's job name. Two aliases intentionally have separate per-job guards, not a script-wide lock.
 
 `scheduledInputs` is separate from schema and manual overrides:
