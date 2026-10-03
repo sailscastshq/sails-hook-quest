@@ -1250,3 +1250,104 @@ test('full native Sails lift propagates Quest initialization failure without pub
   assert.equal(questLoaded, false)
   assert.equal(app.quest, undefined)
 })
+
+test('actual CLI preserves JSON/ref strings and falsy structured values without changing literal string inputs', async ({
+  t
+}) => {
+  const f = fixture(
+    t,
+    `module.exports={friendlyName:'JSON CLI encoding',habitat:'none',inputs:{payload:{type:'json'},reference:{type:'ref'},literal:{type:'string',allowNull:true}},fn:async inputs=>inputs}`
+  )
+  const values = [
+    'ordinary text',
+    '001',
+    '',
+    [],
+    { label: 'object', nested: [false, 0, null] },
+    null,
+    false,
+    0,
+    true,
+    42
+  ]
+  for (const value of values) {
+    const result = await f.run({
+      payload: value,
+      reference: value,
+      literal: typeof value === 'string' ? value : '001'
+    })
+    assert.equal(result.result.status, 'available')
+    assert.deepEqual(result.result.value, {
+      payload: value,
+      reference: value,
+      literal: typeof value === 'string' ? value : '001'
+    })
+  }
+  const literal = 'a "quoted" $value'
+  assert.deepEqual(
+    buildCommandArgs(
+      'fixture',
+      { payload: '001', reference: '', literal },
+      {
+        payload: { type: 'json' },
+        reference: { type: 'ref' },
+        literal: { type: 'string' }
+      }
+    ),
+    [
+      'run',
+      'fixture',
+      '--payload="001"',
+      '--reference=""',
+      `--literal=${literal}`
+    ]
+  )
+})
+
+test('actual resident manually runs a JSON string while its source schedule remains invalid', async ({
+  t
+}) => {
+  const f = fixture(
+    t,
+    `module.exports={friendlyName:'Invalid schedule manual fixture',habitat:'none',inputs:{payload:{type:'json'}},quest:{interval:'not a valid interval'},fn:async inputs=>inputs.payload}`
+  )
+  const app = new (require('sails').Sails)()
+  t.after(async () => {
+    app.quest?.stop()
+    await new Promise((resolve) => app.lower(resolve))
+  })
+  await new Promise((resolve, reject) =>
+    app.load(
+      {
+        appPath: f.appPath,
+        environment: 'console',
+        globals: false,
+        log: { level: 'silent' },
+        hooks: {
+          quest: defineHook,
+          orm: require('sails-hook-orm'),
+          grunt: false,
+          session: false
+        },
+        quest: { autoStart: true }
+      },
+      (error) => (error ? reject(error) : resolve())
+    )
+  )
+  assert.equal(
+    app.quest.metadata('fixture').scheduleState.validation,
+    'invalid'
+  )
+  assert.equal(app.quest.metadata('fixture').scheduled, false)
+  const [receipt] = await app.quest.run('fixture', {
+    payload: 'manual despite invalid schedule'
+  })
+  assert.equal(receipt.trigger, 'manual')
+  assert.equal(receipt.result.status, 'available')
+  assert.equal(receipt.result.value, 'manual despite invalid schedule')
+  assert.equal(
+    app.quest.metadata('fixture').scheduleState.validation,
+    'invalid'
+  )
+  assert.equal(app.quest.metadata('fixture').scheduled, false)
+})
