@@ -161,6 +161,7 @@ test('input admission validation starts no child or business work', async ({
       assert.equal(error.code, 'E_QUEST_ADMISSION_REJECTED')
       assert.equal(error.admission, 'rejected_before_start')
       assert.equal(error.phase, 'validation')
+      assert.equal(error.trigger, 'manual')
       return true
     })
   }
@@ -359,14 +360,16 @@ test('registered due time survives long-delay rechecks and clears on stop/consum
       { name: 'fixture', paused: false, withoutOverlapping: true, timeout: 3e9 }
     ]
   ])
+  const triggers = []
   const context = {
     jobs,
     timers: new Map(),
     dueTimes: new Map(),
     runtime: resident.createRuntime(),
     getNextRunTime: () => target,
-    executeJob: async () => {
+    executeJob: async (_name, _inputs, trigger) => {
       calls++
+      triggers.push(trigger)
     }
   }
   control.scheduleJob('fixture', context)
@@ -384,6 +387,10 @@ test('registered due time survives long-delay rechecks and clears on stop/consum
   control.stopJobs('fixture', context)
   assert.equal(context.timers.size, 0)
   assert.equal(context.dueTimes.size, 0)
+  context.getNextRunTime = () => new Date(now - 1)
+  control.scheduleJob('fixture', context)
+  assert.equal(calls, 2)
+  assert.deepEqual(triggers, ['scheduled', 'scheduled'])
 })
 
 test('named exits preserve process compatibility and expose their actual business exit', async ({
@@ -434,6 +441,8 @@ test('actual resident Sails app owns scheduling, manual admission, pause and met
   const app = new Sails()
   const previous = global.sails
   const starts = []
+  const skippedEvents = []
+  app.on('quest:job:skip', (event) => skippedEvents.push(event))
   app.on('quest:job:start', (event) => starts.push(event))
   t.after(async () => {
     await new Promise((resolve) => app.lower(resolve))
@@ -476,6 +485,8 @@ test('actual resident Sails app owns scheduling, manual admission, pause and met
   assert.equal(starts.length, 0)
   const pending = app.quest.run('resident', { wait: 400 })
   assert.equal(starts.length, 1)
+  assert.equal(starts[0].trigger, 'manual')
+  assert.equal(skippedEvents[0].trigger, 'manual')
   assert.equal(app.quest.metadata('resident').runningCount, 1)
   await app.quest.start('resident')
   const meta = app.quest.metadata('resident')
@@ -488,6 +499,13 @@ test('actual resident Sails app owns scheduling, manual admission, pause and met
   app.quest.stop('resident')
   assert.equal(app.quest.metadata('resident').nextRunAt, null)
   const receipt = (await pending)[0]
+  assert.equal(receipt.trigger, 'manual')
+  assert.ok(
+    skippedEvents.some(
+      (event) =>
+        event.reason === 'already_running' && event.trigger === 'scheduled'
+    )
+  )
   assert.equal(receipt.result.status, 'available')
   assert.deepEqual(receipt.result.value, { count: 0 })
   assert.equal(app.quest.metadata('resident').runningCount, 0)
@@ -495,6 +513,17 @@ test('actual resident Sails app owns scheduling, manual admission, pause and met
   const paused = app.quest.metadata('resident')
   assert.equal(paused.paused, true)
   assert.equal(info.runtimeId, paused.runtimeId)
+  app.quest.resume('resident')
+  const scheduledStart = new Promise((resolve) =>
+    app.once('quest:job:start', resolve)
+  )
+  const scheduledComplete = new Promise((resolve) =>
+    app.once('quest:job:complete', resolve)
+  )
+  await app.quest.start('resident')
+  assert.equal((await scheduledStart).trigger, 'scheduled')
+  app.quest.stop('resident')
+  assert.equal((await scheduledComplete).trigger, 'scheduled')
 })
 
 test('scheduled input metadata separates effective values from schema and manual overrides', async ({
@@ -694,4 +723,166 @@ test('config aliases keep original script/schema, source schedule, and per-job o
   assert.ok(meta.nextRunAt)
   assert.equal(meta.scheduledInputs.values.count, 3)
   assert.equal(meta.scheduledInputs.fields.count.source, 'job_input')
+})
+
+test('autoStart source schedules belong only to the resident, never to its CLI job child', async ({
+  t
+}) => {
+  const f = fixture(
+    t,
+    `module.exports={friendlyName:'Scheduler authority fixture',quest:{interval:10000},fn:async function(){await new Promise(resolve=>setImmediate(resolve));const app=this.sails;const snapshot={autoStart:app.config.quest.autoStart,registered:app.quest.metadata().filter(job=>job.scheduled).map(job=>job.name),otherHook:app.hooks.probe.marker};await new Promise(resolve=>setTimeout(resolve,1300));return snapshot}}`
+  )
+  fs.writeFileSync(
+    path.join(f.appPath, 'scripts', 'sentinel.js'),
+    `module.exports={friendlyName:'Bounded scheduler sentinel',habitat:'none',quest:{timeout:800},fn:async()=>{require('fs').appendFileSync('sentinel-fired','sentinel\\n');return true}}`
+  )
+  fs.mkdirSync(path.join(f.appPath, 'config'))
+  const hookPath = process.env.QUEST_REPRO_BASELINE || path.resolve('lib')
+  fs.writeFileSync(
+    path.join(f.appPath, 'package.json'),
+    JSON.stringify({
+      name: 'quest-auto-start-fixture',
+      scripts: {},
+      dependencies: { 'sails-hook-orm': '^4.0.3' }
+    })
+  )
+  fs.mkdirSync(path.join(f.appPath, 'api', 'hooks', 'quest'), {
+    recursive: true
+  })
+  fs.mkdirSync(path.join(f.appPath, 'api', 'hooks', 'probe'), {
+    recursive: true
+  })
+  fs.writeFileSync(
+    path.join(f.appPath, 'api', 'hooks', 'quest', 'index.js'),
+    `module.exports=require(${JSON.stringify(hookPath)})`
+  )
+  fs.writeFileSync(
+    path.join(f.appPath, 'api', 'hooks', 'probe', 'index.js'),
+    "module.exports=function(){return {marker:'other-hook-loaded',initialize:done=>done()}}"
+  )
+  fs.writeFileSync(
+    path.join(f.appPath, 'config', 'runtime.js'),
+    `module.exports.quest={autoStart:true};module.exports.globals=false;module.exports.log={level:'silent'};module.exports.hooks={grunt:false,session:false}`
+  )
+  const app = new (require('sails').Sails)()
+  const starts = []
+  app.on('quest:job:start', (event) => starts.push(event))
+  t.after(async () => {
+    await new Promise((resolve) => app.lower(resolve))
+  })
+  await new Promise((resolve, reject) =>
+    app.load(
+      {
+        appPath: f.appPath,
+        environment: 'console',
+        globals: false,
+        log: { level: 'silent' },
+        hooks: {
+          quest: defineHook,
+          orm: require('sails-hook-orm'),
+          grunt: false,
+          session: false
+        },
+        quest: { autoStart: true }
+      },
+      (error) => (error ? reject(error) : resolve())
+    )
+  )
+  await new Promise((resolve) => setImmediate(resolve)) // Quest's async ORM-after initialization publishes its API on a later microtask.
+  assert.equal(app.config.quest.autoStart, true)
+  assert.equal(app.quest.metadata('fixture').scheduled, true)
+  assert.equal(app.quest.metadata('sentinel').scheduled, true)
+  app.quest.stop('sentinel') // Stop the resident's one-shot before it becomes due.
+  const due = app.quest.metadata('fixture').nextRunAt
+  const receipt = (await app.quest.run('fixture'))[0]
+  assert.deepEqual(receipt.result.value, {
+    autoStart: false,
+    registered: [],
+    otherHook: 'other-hook-loaded'
+  })
+  assert.equal(fs.existsSync(path.join(f.appPath, 'sentinel-fired')), false)
+  assert.equal(starts.length, 1)
+  assert.equal(app.config.quest.autoStart, true)
+  assert.equal(app.quest.metadata('fixture').scheduled, true)
+  assert.equal(app.quest.metadata('fixture').nextRunAt, due)
+  app.quest.stop()
+})
+
+test('terminal numeric exitCode is distinct from native spawn and preflight rejection codes', async ({
+  t
+}) => {
+  const f = fixture(t, source)
+  const app = new EventEmitter()
+  app.log = { error() {} }
+  f.context.sails = app
+  const failures = []
+  app.on('quest:job:error', (event) => failures.push(event))
+  const success = await f.run({ mode: 'zero' })
+  assert.equal(success.exitCode, 0)
+  await assert.rejects(f.run({ mode: 'throw' }), (error) => {
+    assert.equal(error.exitCode, 1)
+    assert.equal(error.code, undefined)
+    return true
+  })
+  assert.equal(failures.at(-1).exitCode, 1)
+  assert.equal(failures.at(-1).error.code, 1)
+  f.context.config.sailsPath = path.join(f.appPath, 'missing-runner')
+  await assert.rejects(f.run(), (error) => {
+    assert.equal(error.code, 'ENOENT')
+    assert.equal(error.exitCode, null)
+    return true
+  })
+  assert.equal(failures.at(-1).exitCode, null)
+  assert.equal(failures.at(-1).error.code, null)
+  await assert.rejects(f.run({ count: -1 }), (error) => {
+    assert.equal(error.code, 'E_QUEST_ADMISSION_REJECTED')
+    assert.equal(error.exitCode, undefined)
+    return true
+  })
+  assert.equal(failures.at(-1).phase, 'validation')
+  assert.equal(failures.at(-1).exitCode, undefined)
+})
+
+test('metadata distinguishes loaded empty schema from unloaded dynamic definitions', async ({
+  t
+}) => {
+  const f = fixture(
+    t,
+    `module.exports={friendlyName:'Empty schema fixture',habitat:'none',quest:{interval:10000},fn:async()=>true}`
+  )
+  const jobs = await loader.loadJobs({ appPath: f.appPath })
+  loader.addJobDefinition({ name: 'dynamic-unloaded' }, jobs)
+  const context = {
+    jobs,
+    timers: new Map(),
+    dueTimes: new Map(),
+    runtime: resident.createRuntime(),
+    config: {}
+  }
+  const loaded = resident.metadata(context, 'fixture')
+  const dynamic = resident.metadata(context, 'dynamic-unloaded')
+  assert.equal(loaded.inputMetadataAvailable, true)
+  assert.deepEqual({ ...loaded.inputs }, {})
+  assert.equal(dynamic.inputMetadataAvailable, false)
+  assert.deepEqual({ ...dynamic.inputs }, {})
+  assert.equal(jobs.get('dynamic-unloaded').inputSchema, undefined)
+  const app = new EventEmitter()
+  app.log = { error() {} }
+  const starts = []
+  app.on('quest:job:start', (event) => starts.push(event))
+  f.context.sails = app
+  await assert.rejects(
+    executeJob('fixture', jobs.get('fixture'), { unknown: true }, f.context),
+    (error) =>
+      error.code === 'E_QUEST_ADMISSION_REJECTED' &&
+      error.validationCode === 'E_INVALID_ARGINS'
+  )
+  assert.equal(starts.length, 0)
+  const receipt = await executeJob(
+    'fixture',
+    jobs.get('fixture'),
+    {},
+    f.context
+  )
+  assert.equal(receipt.result.value, true)
 })

@@ -18,7 +18,11 @@ fs.symlinkSync(
 )
 fs.writeFileSync(
   path.join(appPath, 'package.json'),
-  JSON.stringify({ name: 'quest-benchmark', scripts: {} })
+  JSON.stringify({
+    name: 'quest-benchmark',
+    scripts: {},
+    dependencies: { 'sails-hook-orm': '^4.0.3' }
+  })
 )
 fs.writeFileSync(
   path.join(appPath, 'scripts', 'fixture.js'),
@@ -30,10 +34,15 @@ fs.writeFileSync(
     .readFileSync(path.join(appPath, 'scripts', 'fixture.js'), 'utf8')
     .replace("habitat:'none',", '')
 )
+fs.mkdirSync(path.join(appPath, 'api', 'hooks', 'quest'), { recursive: true })
+fs.writeFileSync(
+  path.join(appPath, 'api', 'hooks', 'quest', 'index.js'),
+  `module.exports=require(${JSON.stringify(path.resolve('lib'))})`
+)
 fs.mkdirSync(path.join(appPath, 'config'))
 fs.writeFileSync(
   path.join(appPath, 'config', 'runtime.js'),
-  "module.exports.hooks={session:false,grunt:false,orm:require('sails-hook-orm')};module.exports.log={level:'silent'}"
+  "module.exports.hooks={session:false,grunt:false};module.exports.quest={autoStart:false};module.exports.log={level:'silent'}"
 )
 const sink = new Writable({
   write(_chunk, _encoding, done) {
