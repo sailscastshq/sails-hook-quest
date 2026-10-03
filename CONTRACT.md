@@ -4,7 +4,7 @@ This is the local implementation for upstream issue [#13](https://github.com/sai
 
 ## Resident metadata
 
-`getRuntime()` returns a runtime UUID, `contractVersion: 1`, `scope: 'process'`, and capabilities for input metadata, business results, run identity, and resident state, plus explicit childSchedulerSuppression/triggerProvenance/terminalExitCode probes. Cancellation and durable history are explicitly false.
+`getRuntime()` returns a runtime UUID, `contractVersion: 1`, `scope: 'process'`, and capabilities for input metadata, business results, run identity, and resident state, plus explicit childSchedulerSuppression/triggerProvenance/terminalExitCode/terminalSignal probes. Cancellation and durable history are explicitly false.
 
 `metadata()` returns the current registered jobs; `metadata(name)` returns one job or undefined. Each job includes name, original script identity, friendly name/description, `inputMetadataAvailable`, sanitized keyed machine input schema, source-owned schedule, paused/withoutOverlapping flags, active running count, actual timer registration, timer target ISO timestamp (`nextRunAt`, otherwise null), and runtime UUID. Reading metadata neither schedules nor invokes jobs. Pausing blocks new admission and leaves active runs untouched. Timers can stay registered while paused. Stopping removes scheduling, rather than cancelling a child. Pause and scheduling state are process-local and reset when the resident application restarts.
 
@@ -89,3 +89,5 @@ The result transport uses a narrowly scoped CommonJS preload in the owned Sails 
 ## Local verification
 
 Run `npm ci`, `npm test`, `npm run typecheck`, and `npm run lint`. Tests execute synthetic disposable jobs only. The benchmark is `QUEST_BASELINE_PATH=/absolute/path/to/released/lib/core/executor.js node bench/runtime-contract.js`; it alternates release/current CLI executions for quiet, 2 MiB log, and error cases, then measures bounded serialization/diagnostic copying. Benchmark numbers are samples of this machine, not distributed throughput or exact zero-regression guarantees.
+
+`getRuntime().capabilities.terminalSignal` indicates observed Node child-process signals. Terminal complete/error events, success receipts and rejected terminal errors carry `signal: string | null` alongside `exitCode: number | null`. A normal numeric exit or native spawn failure has `signal: null`; an observed `SIGTERM` termination has `exitCode: null, signal: 'SIGTERM'`. Pre-admission rejections and skips have neither terminal field. Named machine exits remain business `result.exit`, independent of the process exit/signal. The signal is the actual owned child's `close` signal; it does not imply who sent it, requested cancellation, or successful cancellation. Cancellation capability remains false.

@@ -403,6 +403,7 @@ test('named exits preserve process compatibility and expose their actual busines
   assert.deepEqual((await f.run()).result.value, { count: 0 })
   const named = await f.run({ fail: true })
   assert.equal(named.success, true)
+  assert.equal(named.signal, null)
   assert.deepEqual(named.result, {
     status: 'available',
     value: 'bad',
@@ -816,31 +817,42 @@ test('terminal numeric exitCode is distinct from native spawn and preflight reje
   app.log = { error() {} }
   f.context.sails = app
   const failures = []
+  const completions = []
+  app.on('quest:job:complete', (event) => completions.push(event))
   app.on('quest:job:error', (event) => failures.push(event))
   const success = await f.run({ mode: 'zero' })
   assert.equal(success.exitCode, 0)
+  assert.equal(success.signal, null)
+  assert.equal(completions[0].exitCode, 0)
+  assert.equal(completions[0].signal, null)
   await assert.rejects(f.run({ mode: 'throw' }), (error) => {
     assert.equal(error.exitCode, 1)
+    assert.equal(error.signal, null)
     assert.equal(error.code, undefined)
     return true
   })
   assert.equal(failures.at(-1).exitCode, 1)
+  assert.equal(failures.at(-1).signal, null)
   assert.equal(failures.at(-1).error.code, 1)
   f.context.config.sailsPath = path.join(f.appPath, 'missing-runner')
   await assert.rejects(f.run(), (error) => {
     assert.equal(error.code, 'ENOENT')
     assert.equal(error.exitCode, null)
+    assert.equal(error.signal, null)
     return true
   })
   assert.equal(failures.at(-1).exitCode, null)
+  assert.equal(failures.at(-1).signal, null)
   assert.equal(failures.at(-1).error.code, null)
   await assert.rejects(f.run({ count: -1 }), (error) => {
     assert.equal(error.code, 'E_QUEST_ADMISSION_REJECTED')
     assert.equal(error.exitCode, undefined)
+    assert.equal(error.signal, undefined)
     return true
   })
   assert.equal(failures.at(-1).phase, 'validation')
   assert.equal(failures.at(-1).exitCode, undefined)
+  assert.equal(failures.at(-1).signal, undefined)
 })
 
 test('metadata distinguishes loaded empty schema from unloaded dynamic definitions', async ({
@@ -1097,4 +1109,41 @@ test('unsafe schedule values register no timers or executions, and cron override
   )
   assert.equal(assessment.validation, 'valid')
   assert.equal(assessment.reason, 'no_future_run')
+})
+
+test('actual owned CLI child reports observed signal termination without cancellation semantics', async ({
+  t
+}) => {
+  const f = fixture(
+    t,
+    `module.exports={friendlyName:'Signal fixture',habitat:'none',fn:async()=>{console.error('signal-fixture-ready');process.kill(process.pid,'SIGTERM');await new Promise(()=>{})}}`
+  )
+  const app = new EventEmitter()
+  app.log = { error() {} }
+  f.context.sails = app
+  const starts = [],
+    failures = [],
+    completed = []
+  app.on('quest:job:start', (event) => starts.push(event))
+  app.on('quest:job:error', (event) => failures.push(event))
+  app.on('quest:job:complete', (event) => completed.push(event))
+  await assert.rejects(f.run(), (error) => {
+    assert.equal(error.exitCode, null)
+    assert.equal(error.signal, 'SIGTERM')
+    assert.equal(error.code, undefined)
+    assert.equal(error.admission, undefined)
+    assert.match(error.message, /terminated by signal SIGTERM/)
+    assert.match(error.logs.stderr, /signal-fixture-ready/)
+    assert.equal(error.runId, starts[0].runId)
+    assert.equal(error.runId, failures[0].runId)
+    return true
+  })
+  assert.equal(starts.length, 1)
+  assert.equal(failures.length, 1)
+  assert.equal(completed.length, 0)
+  assert.equal(failures[0].exitCode, null)
+  assert.equal(failures[0].signal, 'SIGTERM')
+  assert.equal(failures[0].error.code, null)
+  assert.equal(f.context.running.size, 0)
+  assert.equal(f.context.runtime.active.size, 0)
 })
