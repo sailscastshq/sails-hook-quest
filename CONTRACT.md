@@ -1,6 +1,6 @@
-# Resident Quest contract (unreleased v1)
+# Resident Quest contract (v1)
 
-This is the local implementation for upstream issue [#13](https://github.com/sailscastshq/sails-hook-quest/issues/13), based on released main v0.0.5 (`3588713`). The package version is intentionally unchanged pending a separate release decision. Probe `getRuntime().contractVersion` and capabilities; released v0.0.5 has none of these new APIs.
+This contract is introduced in Quest 0.0.6 for upstream issue [#13](https://github.com/sailscastshq/sails-hook-quest/issues/13), based on the previous v0.0.5 source (`3588713`). Probe `getRuntime().contractVersion` and capabilities; released v0.0.5 has none of these new APIs.
 
 ## Resident metadata
 
