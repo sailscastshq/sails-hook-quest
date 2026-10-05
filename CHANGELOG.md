@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.7
+
+### Fixed
+
+- Database-free Sails apps initialize Quest when the ORM hook is disabled or excluded by `loadHooks`. Apps with ORM retain its existing awaited readiness order. Initialization errors still reject Sails loading before a partial Quest API is exposed.
+- Source `autoStart` behavior and owned CLI child scheduler suppression remain intact in the database-free path. Native Sails contracts now cover both missing-ORM configurations, timer cleanup, initialization failure, and execution-child suppression.
+
 ## 0.0.6
 
 Quest now exposes the resident execution contract required by job-management integrations while keeping schedules in application source.
