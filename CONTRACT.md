@@ -95,3 +95,31 @@ Run `npm ci`, `npm test`, `npm run typecheck`, and `npm run lint`. Tests execute
 Quest's async `initialize()` completes only after ORM has loaded, jobs have loaded, source auto-start scheduling has completed, and `sails.quest` has been published. The hook's loaded event, Sails `ready` event and successful full-lift callback can therefore consume the API without a delay or retry. Initialization failures reject Sails loading/lifting instead of escaping through an async event listener or publishing a partial API. Lower cleanup is installed before dependency waiting; owned child auto-start suppression still occurs after source configuration loads.
 
 For source-loaded schemas, JSON/ref inputs use JSON-encoded CLI values even when the supplied value is a string (`'001'`, empty text, or ordinary text). This satisfies whelk's JSON syntax check before its machine invocation; the dedicated input channel still restores exact values for native machine validation. Ordinary string input CLI text is unchanged. Schema-unavailable calls retain their existing CLI behavior and child-side validation. An invalid source schedule does not block an independent manual invocation with valid business inputs.
+
+## Opt-in live output and owned cancellation (unpublished)
+
+`config.quest.runtimeControls = true` enables additive Linux resident capabilities
+`liveLogs` and `cancellation`. Defaults remain false. Version 0.0.7 does not
+supply these capabilities; installing a Slipway server update cannot enable them.
+A coordinated future Quest publication and owner app deployment are required.
+
+`quest:job:log` supplies a sequence-numbered bounded cumulative stdout/stderr tail,
+at most four snapshots per second per active run. This internal app event is raw
+output, like existing terminal events: adapters must redact before persistence or
+transmission. Final lifecycle evidence keeps its own sequence and process result.
+Consumers must describe tail truncation and bounded replay gaps. Missing snapshots
+never indicate process failure and must not trigger another execution.
+
+`sails.quest.cancel(runId)` targets only a child group actually spawned by this
+resident executor with recorded PID/start ticks, UID, session/group and run ID.
+It coalesces duplicate requests, checks all observed group members before TERM
+and optional KILL, and confirms only after no live owned group or escaped tagged
+process is observed. `quest:job:cancelling` is request evidence;
+`quest:job:cancelled` certifies observed termination. A lost/changed identity,
+permission error, escaped descendant or five-second timeout remains
+`quest:job:unconfirmed`, retaining the overlap guard. No unknown run is repeated.
+Mac/Windows cancellation is unsupported. Process evidence cannot undo external
+side effects or guarantee termination of arbitrary daemons that deliberately
+remove run identity; jobs using those patterns must not advertise this guarantee.
+
+Owned process descendants inherit a separate `QUEST_OWNED_RUN_ID` marker. The child-only FD/result contract is still removed before business code runs, so ordinary descendants do not try to read their parent’s result descriptors. A descendant that removes the ownership marker leaves group cancellation unconfirmed.
