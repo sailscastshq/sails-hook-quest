@@ -240,6 +240,7 @@ test(
       env: { ...process.env, QUEST_OWNED_RUN_ID: runId },
       stdio: ['ignore', 'pipe', 'ignore']
     })
+    t.after(() => child.kill('SIGKILL'))
     const escapedPid = Number(
       (await new Promise((resolve) => child.stdout.once('data', resolve)))
         .toString()

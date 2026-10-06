@@ -13,6 +13,10 @@ jobs:
       fail-fast: false
       matrix:
         node: ['18', '22']
+    # /proc must describe the fixture's process namespace. An opaque same-UID
+    # process on a shared host correctly makes termination unconfirmable.
+    container:
+      image: node:${{ matrix.node }}-bookworm
     steps:
       - uses: actions/checkout@v6
         with:
