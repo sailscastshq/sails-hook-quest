@@ -315,7 +315,7 @@ test(
     fs.writeFileSync(path.join(appPath, 'package.json'), '{"scripts":{}}')
     fs.writeFileSync(
       path.join(appPath, 'scripts', 'public-slow.js'),
-      `module.exports={habitat:'none',inputs:{},fn:async()=>{console.log('public owned ready');await new Promise(r=>setTimeout(r,10000))}}`
+      `module.exports={friendlyName:'Public owned fixture',habitat:'none',inputs:{},fn:async()=>{console.log('public owned ready');await new Promise(r=>setTimeout(r,10000))}}`
     )
     const app = new (require('sails').Sails)()
     t.after(async () => {
@@ -361,6 +361,14 @@ test(
       Date.now() < deadline
     )
       await new Promise((resolve) => setTimeout(resolve, 50))
+    assert.ok(
+      events.some(
+        (event) =>
+          event.kind === 'log' &&
+          event.logs.stdout.includes('public owned ready')
+      ),
+      'real public job reached its running log checkpoint'
+    )
     const start = events.find((event) => event.kind === 'start')
     assert.ok(start)
     const pending = app.quest.cancel(start.runId)
