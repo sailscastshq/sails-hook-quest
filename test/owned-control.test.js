@@ -262,6 +262,45 @@ test(
 )
 
 test(
+  'an unreadable same-UID process outside the group cannot establish escaped descendant termination',
+  { skip: process.platform !== 'linux', timeout: 5000 },
+  async (t) => {
+    const { spawn } = require('node:child_process')
+    const { ownProcess } = require('../lib/core/owned-process')
+    const runId = require('node:crypto').randomUUID()
+    const child = spawn(
+      process.execPath,
+      ['-e', "console.log('ready');setInterval(()=>{},1000)"],
+      {
+        detached: true,
+        env: { ...process.env, QUEST_OWNED_RUN_ID: runId },
+        stdio: ['ignore', 'pipe', 'ignore']
+      }
+    )
+    await new Promise((resolve) => child.stdout.once('data', resolve))
+    t.after(() => child.kill('SIGKILL'))
+    const control = ownProcess(child, runId),
+      read = fs.readFileSync
+    let signals = 0
+    t.mock.method(fs, 'readFileSync', (file, ...args) => {
+      if (file === `/proc/${child.pid}/environ`)
+        throw Object.assign(new Error('permission denied'), { code: 'EACCES' })
+      const body = read(file, ...args)
+      if (file !== `/proc/${child.pid}/stat`) return body
+      const edge = body.lastIndexOf(')') + 1,
+        fields = body.slice(edge).trim().split(/\s+/)
+      fields[2] = String(child.pid + 1)
+      return body.slice(0, edge) + ' ' + fields.join(' ')
+    })
+    t.mock.method(process, 'kill', () => {
+      signals++
+    })
+    assert.equal((await control.cancel()).confirmed, false)
+    assert.equal(signals, 0)
+  }
+)
+
+test(
   'only a positively observed zombie state permits ignoring an unreadable exited member',
   { skip: process.platform !== 'linux', timeout: 5000 },
   async (t) => {
