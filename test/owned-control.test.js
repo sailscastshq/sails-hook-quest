@@ -299,3 +299,79 @@ test(
     assert.equal(signals, 0)
   }
 )
+
+test(
+  'public resident Quest cancellation admits synchronously and confirms its exact active run',
+  { skip: process.platform !== 'linux', timeout: 15000 },
+  async (t) => {
+    const appPath = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'quest-public-owned-')
+    )
+    fs.mkdirSync(path.join(appPath, 'scripts'))
+    fs.symlinkSync(
+      path.resolve('node_modules'),
+      path.join(appPath, 'node_modules')
+    )
+    fs.writeFileSync(path.join(appPath, 'package.json'), '{"scripts":{}}')
+    fs.writeFileSync(
+      path.join(appPath, 'scripts', 'public-slow.js'),
+      `module.exports={habitat:'none',inputs:{},fn:async()=>{console.log('public owned ready');await new Promise(r=>setTimeout(r,10000))}}`
+    )
+    const app = new (require('sails').Sails)()
+    t.after(async () => {
+      await new Promise((resolve) => app.lower(resolve))
+      fs.rmSync(appPath, { recursive: true, force: true })
+    })
+    await new Promise((resolve, reject) =>
+      app.load(
+        {
+          appPath,
+          environment: 'test',
+          log: { level: 'silent' },
+          hooks: {
+            quest: require('../lib'),
+            orm: false,
+            grunt: false,
+            session: false,
+            sockets: false
+          },
+          quest: { autoStart: false, runtimeControls: true },
+          globals: { sails: false, _: false, async: false, models: false }
+        },
+        (error) => (error ? reject(error) : resolve())
+      )
+    )
+    const events = []
+    for (const kind of [
+      'start',
+      'log',
+      'cancelling',
+      'cancelled',
+      'unconfirmed'
+    ])
+      app.on('quest:job:' + kind, (event) => events.push({ kind, ...event }))
+    const execution = app.quest.run('public-slow').catch((error) => error)
+    const deadline = Date.now() + 10000
+    while (
+      !events.some(
+        (event) =>
+          event.kind === 'log' &&
+          event.logs.stdout.includes('public owned ready')
+      ) &&
+      Date.now() < deadline
+    )
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    const start = events.find((event) => event.kind === 'start')
+    assert.ok(start)
+    const pending = app.quest.cancel(start.runId)
+    assert.equal(
+      events.filter((event) => event.kind === 'cancelling').length,
+      1,
+      'public cancellation admission is recorded before returning its promise'
+    )
+    assert.equal((await pending).confirmed, true)
+    await execution
+    assert.equal(events.filter((event) => event.kind === 'cancelled').length, 1)
+    assert.equal(app.quest.isRunning('public-slow'), false)
+  }
+)
