@@ -121,3 +121,5 @@ permission error, escaped descendant or five-second timeout remains
 Mac/Windows cancellation is unsupported. Process evidence cannot undo external
 side effects or guarantee termination of arbitrary daemons that deliberately
 remove run identity; jobs using those patterns must not advertise this guarantee.
+
+Owned process descendants inherit a separate `QUEST_OWNED_RUN_ID` marker. The child-only FD/result contract is still removed before business code runs, so ordinary descendants do not try to read their parent’s result descriptors. A descendant that removes the ownership marker leaves group cancellation unconfirmed.

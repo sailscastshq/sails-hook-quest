@@ -22,7 +22,7 @@ test(
     fs.writeFileSync(path.join(appPath, 'package.json'), '{"scripts":{}}')
     fs.writeFileSync(
       path.join(appPath, 'scripts', 'slow.js'),
-      `module.exports={friendlyName:'Owned slow fixture',habitat:'none',inputs:{},fn:async()=>{let n=0;setInterval(()=>console.log('synthetic '+n++),50);await new Promise(r=>setTimeout(r,10000));return false}}`
+      `module.exports={friendlyName:'Owned slow fixture',habitat:'none',inputs:{},fn:async()=>{let n=0;require('node:child_process').spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{});console.log('synthetic descendant ready');setInterval(()=>{},1000)"],{stdio:['ignore','inherit','inherit']});setInterval(()=>console.log('synthetic '+n++),50);await new Promise(r=>setTimeout(r,10000));return false}}`
     )
     const sails = new EventEmitter()
     const diagnostics = []
@@ -69,7 +69,8 @@ test(
     while (
       !events.some(
         (event) =>
-          event.kind === 'log' && event.logs.stdout.includes('synthetic')
+          event.kind === 'log' &&
+          event.logs.stdout.includes('synthetic descendant ready')
       ) &&
       Date.now() < deadline
     )
@@ -81,7 +82,12 @@ test(
       'actual spawned child ownership was recorded: ' + diagnostics.join('')
     )
     assert.ok(events.some((event) => event.kind === 'log'))
+    const cancelStartedAt = Date.now()
     const cancellation = await control.cancel()
+    assert.ok(
+      Date.now() - cancelStartedAt >= 1900,
+      'TERM-resistant descendant required the checked KILL phase'
+    )
     assert.deepEqual(cancellation, { state: 'cancelled', confirmed: true })
     assert.equal((await outcome).state, 'cancelled')
     assert.equal(events.filter((event) => event.kind === 'cancelled').length, 1)
@@ -108,7 +114,7 @@ test(
       ],
       {
         detached: true,
-        env: { ...process.env, QUEST_RUN_ID: runId },
+        env: { ...process.env, QUEST_OWNED_RUN_ID: runId },
         stdio: ['ignore', 'pipe', 'ignore']
       }
     )
@@ -133,7 +139,7 @@ test(
       ['-e', "console.log('ready');setInterval(()=>{},1000)"],
       {
         detached: true,
-        env: { ...process.env, QUEST_RUN_ID: runId },
+        env: { ...process.env, QUEST_OWNED_RUN_ID: runId },
         stdio: ['ignore', 'pipe', 'ignore']
       }
     )
@@ -171,7 +177,7 @@ test(
     const source = `const c=require('node:child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore',env:process.env});console.log(c.pid);setInterval(()=>{},1000)`
     const child = spawn(process.execPath, ['-e', source], {
       detached: true,
-      env: { ...process.env, QUEST_RUN_ID: runId },
+      env: { ...process.env, QUEST_OWNED_RUN_ID: runId },
       stdio: ['ignore', 'pipe', 'ignore']
     })
     const escapedPid = Number(
@@ -198,7 +204,7 @@ test(
           fs
             .readFileSync(`/proc/${escapedPid}/environ`, 'utf8')
             .split('\0')
-            .includes(`QUEST_RUN_ID=${runId}`)
+            .includes(`QUEST_OWNED_RUN_ID=${runId}`)
         )
         process.kill(escapedPid, 'SIGKILL')
       } catch (error) {
@@ -226,7 +232,7 @@ test(
       ['-e', "console.log('ready');setInterval(()=>{},1000)"],
       {
         detached: true,
-        env: { ...process.env, QUEST_RUN_ID: runId },
+        env: { ...process.env, QUEST_OWNED_RUN_ID: runId },
         stdio: ['ignore', 'pipe', 'ignore']
       }
     )
@@ -267,7 +273,7 @@ test(
       ['-e', "console.log('ready');setInterval(()=>{},1000)"],
       {
         detached: true,
-        env: { ...process.env, QUEST_RUN_ID: runId },
+        env: { ...process.env, QUEST_OWNED_RUN_ID: runId },
         stdio: ['ignore', 'pipe', 'ignore']
       }
     )
