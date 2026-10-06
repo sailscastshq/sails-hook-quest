@@ -213,3 +213,83 @@ test(
     assert.equal(process.kill(escapedPid, 0), true)
   }
 )
+
+test(
+  'unreadable live members and unknown group identity never count as terminated or receive a signal',
+  { skip: process.platform !== 'linux', timeout: 5000 },
+  async (t) => {
+    const { spawn } = require('node:child_process')
+    const { ownProcess } = require('../lib/core/owned-process')
+    const runId = require('node:crypto').randomUUID()
+    const child = spawn(
+      process.execPath,
+      ['-e', "console.log('ready');setInterval(()=>{},1000)"],
+      {
+        detached: true,
+        env: { ...process.env, QUEST_RUN_ID: runId },
+        stdio: ['ignore', 'pipe', 'ignore']
+      }
+    )
+    await new Promise((resolve) => child.stdout.once('data', resolve))
+    t.after(() => child.kill('SIGKILL'))
+    const unreadable = ownProcess(child, runId),
+      unknown = ownProcess(child, runId)
+    const read = fs.readFileSync
+    let unknownGroup = false,
+      signals = 0
+    t.mock.method(fs, 'readFileSync', (file, ...args) => {
+      if (
+        file === `/proc/${child.pid}/environ` ||
+        (unknownGroup && file === `/proc/${child.pid}/stat`)
+      )
+        throw Object.assign(new Error('permission denied'), { code: 'EACCES' })
+      return read(file, ...args)
+    })
+    t.mock.method(process, 'kill', () => {
+      signals++
+    })
+    assert.equal((await unreadable.cancel()).confirmed, false)
+    unknownGroup = true
+    assert.equal((await unknown.cancel()).confirmed, false)
+    assert.equal(signals, 0)
+  }
+)
+
+test(
+  'only a positively observed zombie state permits ignoring an unreadable exited member',
+  { skip: process.platform !== 'linux', timeout: 5000 },
+  async (t) => {
+    const { spawn } = require('node:child_process')
+    const { ownProcess } = require('../lib/core/owned-process')
+    const runId = require('node:crypto').randomUUID()
+    const child = spawn(
+      process.execPath,
+      ['-e', "console.log('ready');setInterval(()=>{},1000)"],
+      {
+        detached: true,
+        env: { ...process.env, QUEST_RUN_ID: runId },
+        stdio: ['ignore', 'pipe', 'ignore']
+      }
+    )
+    await new Promise((resolve) => child.stdout.once('data', resolve))
+    t.after(() => child.kill('SIGKILL'))
+    const control = ownProcess(child, runId),
+      read = fs.readFileSync
+    let signals = 0
+    t.mock.method(fs, 'readFileSync', (file, ...args) => {
+      if (file === `/proc/${child.pid}/environ`)
+        throw Object.assign(new Error('permission denied'), { code: 'EACCES' })
+      const body = read(file, ...args)
+      if (file !== `/proc/${child.pid}/stat`) return body
+      const edge = body.lastIndexOf(')') + 1,
+        fields = body.slice(edge).trim().split(/\s+/)
+      fields[0] = 'Z'
+      return body.slice(0, edge) + ' ' + fields.join(' ')
+    })
+    t.mock.method(process, 'kill', () => {
+      signals++
+    })
+    assert.equal((await control.cancel()).confirmed, true)
+    assert.equal(signals, 0)
+  }
+)
