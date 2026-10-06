@@ -22,7 +22,7 @@ test(
     fs.writeFileSync(path.join(appPath, 'package.json'), '{"scripts":{}}')
     fs.writeFileSync(
       path.join(appPath, 'scripts', 'slow.js'),
-      `module.exports={friendlyName:'Owned slow fixture',habitat:'none',inputs:{},fn:async()=>{let n=0;require('node:child_process').spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{});console.log('synthetic descendant ready');setInterval(()=>{},1000)"],{stdio:['ignore','inherit','inherit']});setInterval(()=>console.log('synthetic '+n++),50);await new Promise(r=>setTimeout(r,10000));return false}}`
+      `module.exports={friendlyName:'Owned slow fixture',habitat:'none',inputs:{},fn:async()=>{console.log('synthetic root ready '+process.pid);let n=0;require('node:child_process').spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{});console.log('synthetic descendant ready '+process.pid);setInterval(()=>{},1000)"],{stdio:['ignore','inherit','inherit']});setInterval(()=>console.log('synthetic '+n++),50);await new Promise(r=>setTimeout(r,10000));return false}}`
     )
     const sails = new EventEmitter()
     const diagnostics = []
@@ -43,10 +43,68 @@ test(
       sails.on('quest:job:' + name, (event) =>
         events.push({ kind: name, ...event })
       )
+    const cleanupIdentities = new Map()
+    t.after(() => {
+      const runId = events.find((event) => event.kind === 'start')?.runId
+      for (const [pid, ticks] of cleanupIdentities) {
+        try {
+          const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8')
+          if (
+            stat
+              .slice(stat.lastIndexOf(')') + 1)
+              .trim()
+              .split(/\s+/)[0] === 'Z'
+          )
+            continue
+          assert.equal(
+            stat
+              .slice(stat.lastIndexOf(')') + 1)
+              .trim()
+              .split(/\s+/)[19],
+            ticks
+          )
+          assert.ok(
+            fs
+              .readFileSync(`/proc/${pid}/environ`, 'utf8')
+              .split('\0')
+              .includes(`QUEST_OWNED_RUN_ID=${runId}`)
+          )
+          process.kill(pid, 'SIGKILL')
+        } catch (error) {
+          if (!['ENOENT', 'ESRCH'].includes(error.code)) throw error
+        }
+      }
+    })
     const sink = () =>
       new Writable({
         write(chunk, _encoding, done) {
           diagnostics.push(chunk.toString())
+          const runId = events.find((event) => event.kind === 'start')?.runId
+          for (const match of diagnostics
+            .join('')
+            .matchAll(/synthetic (?:root|descendant) ready (\d+)/g)) {
+            const pid = Number(match[1])
+            if (cleanupIdentities.has(pid)) continue
+            try {
+              if (
+                !fs
+                  .readFileSync(`/proc/${pid}/environ`, 'utf8')
+                  .split('\0')
+                  .includes(`QUEST_OWNED_RUN_ID=${runId}`)
+              )
+                continue
+              const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8')
+              cleanupIdentities.set(
+                pid,
+                stat
+                  .slice(stat.lastIndexOf(')') + 1)
+                  .trim()
+                  .split(/\s+/)[19]
+              )
+            } catch (error) {
+              if (!['ENOENT', 'ESRCH'].includes(error.code)) throw error
+            }
+          }
           done()
         }
       })
@@ -84,11 +142,11 @@ test(
     assert.ok(events.some((event) => event.kind === 'log'))
     const cancelStartedAt = Date.now()
     const cancellation = await control.cancel()
+    assert.deepEqual(cancellation, { state: 'cancelled', confirmed: true })
     assert.ok(
       Date.now() - cancelStartedAt >= 1900,
       'TERM-resistant descendant required the checked KILL phase'
     )
-    assert.deepEqual(cancellation, { state: 'cancelled', confirmed: true })
     assert.equal((await outcome).state, 'cancelled')
     assert.equal(events.filter((event) => event.kind === 'cancelled').length, 1)
     assert.equal(events.filter((event) => event.kind === 'complete').length, 0)
@@ -102,7 +160,7 @@ test(
 test(
   'duplicate cancellation coalesces and a TERM-resistant owned child is confirmed only after KILL',
   { skip: process.platform !== 'linux', timeout: 12000 },
-  async () => {
+  async (t) => {
     const { spawn } = require('node:child_process')
     const { ownProcess } = require('../lib/core/owned-process')
     const runId = require('node:crypto').randomUUID()
@@ -119,11 +177,13 @@ test(
       }
     )
     await new Promise((resolve) => child.stdout.once('data', resolve))
+    t.after(() => child.kill('SIGKILL'))
     const control = ownProcess(child, runId)
     const first = control.cancel(),
       second = control.cancel()
     assert.equal(first, second)
-    assert.equal((await first).confirmed, true)
+    const result = await first
+    assert.equal(result.confirmed, true, JSON.stringify(result))
   }
 )
 
