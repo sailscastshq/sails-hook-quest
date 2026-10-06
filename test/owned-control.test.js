@@ -36,7 +36,9 @@ test(
       'complete',
       'unconfirmed'
     ])
-      sails.on('quest:job:' + name, (event) => events.push({ name, ...event }))
+      sails.on('quest:job:' + name, (event) =>
+        events.push({ kind: name, ...event })
+      )
     const sink = () =>
       new Writable({
         write(_chunk, _encoding, done) {
@@ -62,23 +64,23 @@ test(
     while (
       !events.some(
         (event) =>
-          event.name === 'log' && event.logs.stdout.includes('synthetic')
+          event.kind === 'log' && event.logs.stdout.includes('synthetic')
       ) &&
       Date.now() < deadline
     )
       await new Promise((r) => setTimeout(r, 50))
-    const start = events.find((event) => event.name === 'start')
+    const start = events.find((event) => event.kind === 'start')
     const control = runtime.controls.get(start.runId)
     assert.ok(control, 'actual spawned child ownership was recorded')
-    assert.ok(events.some((event) => event.name === 'log'))
+    assert.ok(events.some((event) => event.kind === 'log'))
     const cancellation = await control.cancel()
     assert.deepEqual(cancellation, { state: 'cancelled', confirmed: true })
     assert.equal((await outcome).state, 'cancelled')
-    assert.equal(events.filter((event) => event.name === 'cancelled').length, 1)
-    assert.equal(events.filter((event) => event.name === 'complete').length, 0)
+    assert.equal(events.filter((event) => event.kind === 'cancelled').length, 1)
+    assert.equal(events.filter((event) => event.kind === 'complete').length, 0)
     assert.equal(runtime.active.size, 0)
     assert.equal(runtime.controls.size, 0)
-    for (const event of events.filter((event) => event.name === 'log'))
+    for (const event of events.filter((event) => event.kind === 'log'))
       assert.ok(Buffer.byteLength(event.logs.stdout) <= 1024)
   }
 )
