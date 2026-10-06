@@ -8,6 +8,221 @@ const { Writable } = require('node:stream')
 const { executeJob } = require('../lib/core/executor')
 const { createRuntime } = require('../lib/core/runtime')
 
+test('default execution retains final logs without emitting opt-in live events', async (t) => {
+  const appPath = fs.mkdtempSync(path.join(os.tmpdir(), 'quest-default-log-'))
+  t.after(() => fs.rmSync(appPath, { recursive: true, force: true }))
+  fs.mkdirSync(path.join(appPath, 'scripts'))
+  fs.writeFileSync(path.join(appPath, 'scripts', 'plain.js'), '')
+  const runner = path.join(appPath, 'runner')
+  fs.writeFileSync(
+    runner,
+    '#!/usr/bin/env node\nconsole.log("synthetic default output")'
+  )
+  fs.chmodSync(runner, 0o755)
+  const sails = new EventEmitter(),
+    live = []
+  sails.log = { warn() {}, error() {} }
+  sails.on('quest:job:log', (event) => live.push(event))
+  const sink = new Writable({
+    write(_chunk, _encoding, done) {
+      done()
+    }
+  })
+  const result = await executeJob(
+    'plain',
+    {},
+    {},
+    {
+      sails,
+      stdout: sink,
+      stderr: sink,
+      config: { appPath, sailsPath: runner, runtimeControls: false }
+    }
+  )
+  assert.equal(result.success, true)
+  assert.match(result.logs.stdout, /synthetic default output/)
+  assert.equal(live.length, 0)
+})
+
+async function observedFixture(t, body) {
+  const appPath = fs.mkdtempSync(path.join(os.tmpdir(), 'quest-outcome-'))
+  fs.mkdirSync(path.join(appPath, 'scripts'))
+  fs.symlinkSync(
+    path.resolve('node_modules'),
+    path.join(appPath, 'node_modules')
+  )
+  fs.writeFileSync(path.join(appPath, 'package.json'), '{"scripts":{}}')
+  fs.writeFileSync(
+    path.join(appPath, 'scripts', 'observed.js'),
+    `module.exports={friendlyName:'Observed synthetic fixture',habitat:'none',inputs:{},fn:async()=>{console.log('synthetic owned root '+process.pid);${body}}}`
+  )
+  const sails = new EventEmitter(),
+    events = [],
+    runtime = createRuntime(),
+    running = new Map()
+  sails.log = { warn() {}, error() {} }
+  for (const kind of [
+    'start',
+    'log',
+    'cancelling',
+    'unconfirmed',
+    'cancelled',
+    'complete',
+    'skip'
+  ])
+    sails.on('quest:job:' + kind, (event) => events.push({ kind, ...event }))
+  let output = '',
+    rootPid,
+    rootTicks
+  const sink = new Writable({
+    write(chunk, _encoding, done) {
+      output += chunk.toString()
+      const match = output.match(/synthetic owned root (\d+)/)
+      if (match && !rootPid) {
+        rootPid = Number(match[1])
+        try {
+          const stat = fs.readFileSync(`/proc/${rootPid}/stat`, 'utf8')
+          rootTicks = stat
+            .slice(stat.lastIndexOf(')') + 1)
+            .trim()
+            .split(/\s+/)[19]
+        } catch (error) {
+          if (error.code !== 'ENOENT') throw error
+        }
+      }
+      done()
+    }
+  })
+  const job = { inputSchema: {}, withoutOverlapping: true }
+  const context = {
+    sails,
+    runtime,
+    running,
+    stdout: sink,
+    stderr: sink,
+    config: { appPath, runtimeControls: true }
+  }
+  const execution = executeJob('observed', job, {}, context).catch(
+    (error) => error
+  )
+  let control
+  const deadline = Date.now() + 5000
+  while ((!rootPid || !control) && Date.now() < deadline) {
+    control ||= runtime.controls.get(
+      events.find((event) => event.kind === 'start')?.runId
+    )
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  t.after(async () => {
+    if (rootPid && rootTicks) {
+      try {
+        const stat = fs.readFileSync(`/proc/${rootPid}/stat`, 'utf8')
+        const fields = stat
+          .slice(stat.lastIndexOf(')') + 1)
+          .trim()
+          .split(/\s+/)
+        if (fields[0] !== 'Z') {
+          assert.equal(fields[19], rootTicks)
+          assert.ok(
+            fs
+              .readFileSync(`/proc/${rootPid}/environ`, 'utf8')
+              .split('\0')
+              .includes(`QUEST_OWNED_RUN_ID=${events[0].runId}`)
+          )
+          process.kill(rootPid, 'SIGKILL')
+        }
+      } catch (error) {
+        if (!['ENOENT', 'ESRCH'].includes(error.code)) throw error
+      }
+    }
+    await execution
+    fs.rmSync(appPath, { recursive: true, force: true })
+  })
+  assert.ok(control, 'positive owned child control was acquired')
+  assert.ok(rootPid, 'real child reached its fixture checkpoint')
+  return { rootPid, execution, control, context, job, events, runtime, running }
+}
+
+test(
+  'unconfirmed cancellation is emitted while the real child remains alive and overlap stays held',
+  { skip: process.platform !== 'linux', timeout: 10000 },
+  async (t) => {
+    const f = await observedFixture(
+      t,
+      'await new Promise(r=>setTimeout(r,5000));return false'
+    )
+    const read = fs.readFileSync
+    t.mock.method(fs, 'readFileSync', (file, ...args) => {
+      if (file === `/proc/${f.rootPid}/environ`)
+        throw Object.assign(new Error('synthetic unreadable member'), {
+          code: 'EACCES'
+        })
+      return read(file, ...args)
+    })
+    const first = f.control.cancel(),
+      duplicate = f.control.cancel()
+    assert.equal(first, duplicate)
+    assert.equal((await first).state, 'unconfirmed')
+    t.mock.restoreAll()
+    assert.equal(
+      f.events.filter((event) => event.kind === 'unconfirmed').length,
+      1
+    )
+    assert.equal(
+      f.events.filter((event) => event.kind === 'cancelled').length,
+      0
+    )
+    assert.equal(process.kill(f.rootPid, 0), true)
+    assert.equal(f.runtime.active.get('observed').size, 1)
+    assert.equal(f.running.has('observed'), true)
+    assert.equal(
+      (await executeJob('observed', f.job, {}, f.context)).reason,
+      'already_running'
+    )
+    assert.equal(f.events.filter((event) => event.kind === 'start').length, 1)
+  }
+)
+
+test(
+  'natural child exit before pipe close preserves the business result and duplicate cancellation truth',
+  { skip: process.platform !== 'linux', timeout: 10000 },
+  async (t) => {
+    const f = await observedFixture(
+      t,
+      `require('node:child_process').spawn(process.execPath,['-e','setTimeout(()=>{},1500)'],{stdio:['ignore','inherit','inherit']});return false`
+    )
+    const deadline = Date.now() + 5000
+    while (f.runtime.controls.has(f.events[0].runId) && Date.now() < deadline)
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    assert.equal(
+      f.runtime.controls.has(f.events[0].runId),
+      false,
+      'exit withdraws active control before delayed close'
+    )
+    assert.equal(
+      f.events.some((event) => event.kind === 'complete'),
+      false,
+      'real inherited pipe is still open'
+    )
+    const first = f.control.cancel(),
+      duplicate = f.control.cancel()
+    assert.equal(first, duplicate)
+    assert.notEqual((await first).state, 'cancelled')
+    const result = await f.execution
+    assert.equal(result.success, true)
+    assert.equal(result.result.status, 'available')
+    assert.equal(result.result.value, false)
+    assert.equal(
+      f.events.filter((event) => event.kind === 'complete').length,
+      1
+    )
+    assert.equal(
+      f.events.filter((event) => event.kind === 'cancelled').length,
+      0
+    )
+  }
+)
+
 test(
   'real Sails child exposes bounded live snapshots and confirms termination of its owned group',
   { skip: process.platform !== 'linux', timeout: 15000 },
