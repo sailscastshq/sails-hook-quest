@@ -150,3 +150,56 @@ test(
     assert.equal(signals, 0)
   }
 )
+
+test(
+  'escaped tagged descendants leave cancellation unconfirmed without signalling their new group',
+  { skip: process.platform !== 'linux', timeout: 12000 },
+  async (t) => {
+    const { spawn } = require('node:child_process')
+    const { ownProcess } = require('../lib/core/owned-process')
+    const runId = require('node:crypto').randomUUID()
+    const source = `const c=require('node:child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore',env:process.env});console.log(c.pid);setInterval(()=>{},1000)`
+    const child = spawn(process.execPath, ['-e', source], {
+      detached: true,
+      env: { ...process.env, QUEST_RUN_ID: runId },
+      stdio: ['ignore', 'pipe', 'ignore']
+    })
+    const escapedPid = Number(
+      (await new Promise((resolve) => child.stdout.once('data', resolve)))
+        .toString()
+        .trim()
+    )
+    const originalStat = fs.readFileSync(`/proc/${escapedPid}/stat`, 'utf8')
+    const startTicks = originalStat
+      .slice(originalStat.lastIndexOf(')') + 1)
+      .trim()
+      .split(/\s+/)[19]
+    t.after(() => {
+      try {
+        const current = fs.readFileSync(`/proc/${escapedPid}/stat`, 'utf8')
+        assert.equal(
+          current
+            .slice(current.lastIndexOf(')') + 1)
+            .trim()
+            .split(/\s+/)[19],
+          startTicks
+        )
+        assert.ok(
+          fs
+            .readFileSync(`/proc/${escapedPid}/environ`, 'utf8')
+            .split('\0')
+            .includes(`QUEST_RUN_ID=${runId}`)
+        )
+        process.kill(escapedPid, 'SIGKILL')
+      } catch (error) {
+        if (!['ENOENT', 'ESRCH'].includes(error.code)) throw error
+      }
+    })
+    const control = ownProcess(child, runId)
+    assert.deepEqual(await control.cancel(), {
+      state: 'unconfirmed',
+      confirmed: false
+    })
+    assert.equal(process.kill(escapedPid, 0), true)
+  }
+)
