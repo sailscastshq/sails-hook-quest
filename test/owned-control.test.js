@@ -19,13 +19,17 @@ test(
       path.resolve('node_modules'),
       path.join(appPath, 'node_modules')
     )
-    fs.writeFileSync(path.join(appPath, 'package.json'), '{}')
+    fs.writeFileSync(path.join(appPath, 'package.json'), '{"scripts":{}}')
     fs.writeFileSync(
       path.join(appPath, 'scripts', 'slow.js'),
       `module.exports={friendlyName:'Owned slow fixture',habitat:'none',inputs:{},fn:async()=>{let n=0;setInterval(()=>console.log('synthetic '+n++),50);await new Promise(r=>setTimeout(r,10000));return false}}`
     )
     const sails = new EventEmitter()
-    sails.log = { error() {} }
+    const diagnostics = []
+    sails.log = {
+      error() {},
+      warn: (...args) => diagnostics.push(args.join(' '))
+    }
     const events = []
     for (const name of [
       'start',
@@ -41,7 +45,8 @@ test(
       )
     const sink = () =>
       new Writable({
-        write(_chunk, _encoding, done) {
+        write(chunk, _encoding, done) {
+          diagnostics.push(chunk.toString())
           done()
         }
       })
@@ -71,7 +76,10 @@ test(
       await new Promise((r) => setTimeout(r, 50))
     const start = events.find((event) => event.kind === 'start')
     const control = runtime.controls.get(start.runId)
-    assert.ok(control, 'actual spawned child ownership was recorded')
+    assert.ok(
+      control,
+      'actual spawned child ownership was recorded: ' + diagnostics.join('')
+    )
     assert.ok(events.some((event) => event.kind === 'log'))
     const cancellation = await control.cancel()
     assert.deepEqual(cancellation, { state: 'cancelled', confirmed: true })
