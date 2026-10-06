@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.0.8
+
+### Added
+
+- Opt-in Linux live diagnostics and cancellation for the exact owned resident run. Enable `config.quest.runtimeControls = true`; capability probes remain authoritative. Defaults and non-Linux execution keep their prior terminal-log behavior.
+- Cumulative bounded live stdout/stderr tails, emitted at most four times per second. Consumers still own transport, authorization, redaction, replay and persistence.
+- Cancellation verifies the actual child PID/start ticks, UID, session/group and inherited run marker before TERM or a separately checked KILL. Concurrent requests coalesce; ordinary owned descendants are included.
+
+### Correctness and limits
+
+- `Cancelled` requires observed termination caused by an admitted cancellation. Already-exited children and valid natural results retain their actual Completed/result outcome, including falsy business results and exit-before-pipe-close races.
+- Unconfirmed ownership, unreadable process evidence, escaped tagged descendants and the confirmation deadline report Unknown immediately even while the child remains alive. The overlap guard stays held; no automatic rerun occurs.
+- Linux `/proc` evidence is required. Opaque shared hosts may remain unconfirmed. Scheduling, run/runtime identity, consumed state and overlap remain process-local; this release adds no distributed scheduler, durable execution ledger, automatic retries or exactly-once side effects.
+- Node 18 and 22 real Sails/owned-process contracts cover default-off compatibility, natural completion, duplicate control, live Unknown outcomes and ownership failures. See [CONTRACT.md](CONTRACT.md) for API shapes and bounds.
+
 ## 0.0.7
 
 ### Fixed
