@@ -1,0 +1,53 @@
+# Changelog
+
+## Unreleased
+
+- Owned CLI jobs instantiate their script machine after Sails setup, preventing the false missing-await warning during slow app loading. Exact JSON inputs, Sails metadata, business exits and result capture remain intact; real script warnings and errors remain visible.
+
+## 0.0.8
+
+### Added
+
+- Opt-in Linux live diagnostics and cancellation for the exact owned resident run. Enable `config.quest.runtimeControls = true`; capability probes remain authoritative. Defaults and non-Linux execution keep their prior terminal-log behavior.
+- Cumulative bounded live stdout/stderr tails, emitted at most four times per second. Consumers still own transport, authorization, redaction, replay and persistence.
+- Cancellation verifies the actual child PID/start ticks, UID, session/group and inherited run marker before TERM or a separately checked KILL. Concurrent requests coalesce; ordinary owned descendants are included.
+
+### Correctness and limits
+
+- `Cancelled` requires observed termination caused by an admitted cancellation. Already-exited children and valid natural results retain their actual Completed/result outcome, including falsy business results and exit-before-pipe-close races.
+- Unconfirmed ownership, unreadable process evidence, escaped tagged descendants and the confirmation deadline report Unknown immediately even while the child remains alive. The overlap guard stays held; no automatic rerun occurs.
+- Linux `/proc` evidence is required. Opaque shared hosts may remain unconfirmed. Scheduling, run/runtime identity, consumed state and overlap remain process-local; this release adds no distributed scheduler, durable execution ledger, automatic retries or exactly-once side effects.
+- Node 18 and 22 real Sails/owned-process contracts cover default-off compatibility, natural completion, duplicate control, live Unknown outcomes and ownership failures. See [CONTRACT.md](CONTRACT.md) for API shapes and bounds.
+
+## 0.0.7
+
+### Fixed
+
+- Database-free Sails apps initialize Quest when the ORM hook is disabled or excluded by `loadHooks`. Apps with ORM retain its existing awaited readiness order. Initialization errors still reject Sails loading before a partial Quest API is exposed.
+- Source `autoStart` behavior and owned CLI child scheduler suppression remain intact in the database-free path. Native Sails contracts now cover both missing-ORM configurations, timer cleanup, initialization failure, and execution-child suppression.
+
+## 0.0.6
+
+Quest now exposes the resident execution contract required by job-management integrations while keeping schedules in application source.
+
+### Added
+
+- Process-local runtime identity and capability probes, sanitized input/schema metadata, effective scheduled input previews, running counts, pause state and actual registered timer targets.
+- Stable run identity and manual/scheduled provenance on lifecycle events and receipts. Terminal outcomes preserve numeric process exit codes and observed termination signals separately from machine business exits.
+- Actual machine business results over a dedicated bounded channel, independent of stdout/stderr. Null, false and zero remain values; unsupported, oversized and nonserializable results are reported explicitly. Bounded diagnostic tails include warnings from successful jobs.
+- Bounded schedule registration/validation diagnostics, effective cron timezone precedence and memory-only restart semantics.
+
+### Fixed
+
+- Invalid inputs for source-loaded jobs reject before child launch with `E_QUEST_ADMISSION_REJECTED`, preserving the original Sails validation code. Loaded empty schemas reject unknown inputs; dynamic jobs without metadata keep child-side validation.
+- Quest initialization completes only after ORM readiness, jobs and automatic schedules are loaded, and `sails.quest` is published. Successful loaded/ready events and lift callbacks can use the API immediately. Initialization failures reject Sails loading/lifting.
+- Owned Sails CLI job children suppress their own automatic Quest schedules after source configuration loads. The resident retains scheduler authority and the child retains application hooks/context.
+- Unsafe zero/negative/non-finite/out-of-range recurring intervals and invalid dates/timeouts register no timer. Numeric timeouts must be nonnegative; zero remains an immediate one-shot. These are intentional changes for invalid configuration. Valid expired dates and exhausted cron ranges report no future run rather than invalid configuration.
+- Source config aliases preserve original script/schema identity. Allowed overlap state lasts until the final active child completes, and intermediate long-delay timers retain their original target.
+- JSON/ref CLI inputs use schema-aware JSON encoding, including ordinary strings, `001` and empty text, while ordinary string inputs keep their literal semantics. Invalid schedules do not prevent an independent manual run with valid business inputs.
+
+### Compatibility and limits
+
+Existing public job-control methods and lifecycle event names remain. New metadata, receipt and event fields are additive. Input precedence remains `job.inputs < scriptInputs < manual inputs`. Pause does not terminate active children; stopping removes future scheduling. All resident scheduling, diagnostics, runtime identity and consumed state are memory-only. Relative intervals/timeouts restart from registration; missed runs are not replayed.
+
+There is no cancellation API, durable execution ledger, distributed lock, workflow builder, second scheduler, automatic retry or transport server. Consumers own transport, authorization, persistence and recovery. See [CONTRACT.md](CONTRACT.md) for exact shapes, bounds and capability gating.
