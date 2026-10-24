@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Owned CLI jobs instantiate their script machine after Sails setup, preventing the false missing-await warning during slow app loading. Exact JSON inputs, Sails metadata, business exits and result capture remain intact; real script warnings and errors remain visible.
+
 ## 0.0.8
 
 ### Added

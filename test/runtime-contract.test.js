@@ -1351,3 +1351,39 @@ test('actual resident manually runs a JSON string while its source schedule rema
   )
   assert.equal(app.quest.metadata('fixture').scheduled, false)
 })
+
+test('owned CLI waits for slow Sails setup before creating its machine deferred', async ({
+  t
+}) => {
+  const f = fixture(
+    t,
+    `module.exports={friendlyName:'Slow setup fixture',inputs:{payload:{type:'json'}},fn:async function(inputs){require('node:fs').appendFileSync('executions','x');return {payload:inputs.payload,environment:this.sails.config.environment}}}`
+  )
+  fs.mkdirSync(path.join(f.appPath, 'config'))
+  fs.writeFileSync(
+    path.join(f.appPath, 'config', 'hooks.js'),
+    "module.exports.hooks={grunt:false,orm:require('sails-hook-orm'),session:false};module.exports.log={level:'silent'}"
+  )
+  fs.mkdirSync(path.join(f.appPath, 'api', 'hooks'), { recursive: true })
+  fs.writeFileSync(
+    path.join(f.appPath, 'api', 'hooks', 'slow-setup.js'),
+    'module.exports=function(){return {initialize(done){setTimeout(done,16000)}}}'
+  )
+  f.context.config.environment = 'console'
+  const started = Date.now()
+  const result = await f.run({
+    payload: { zero: 0, no: false, empty: '', nil: null }
+  })
+  assert.ok(Date.now() - started >= 16000)
+  assert.equal(result.exitCode, 0)
+  assert.equal(result.result.status, 'available')
+  assert.deepEqual(result.result.value, {
+    payload: { zero: 0, no: false, empty: '', nil: null },
+    environment: 'console'
+  })
+  assert.equal(fs.readFileSync(path.join(f.appPath, 'executions'), 'utf8'), 'x')
+  assert.doesNotMatch(
+    result.logs.stderr + result.logs.stdout,
+    /still not actually been executed|missing an "await"/
+  )
+})
