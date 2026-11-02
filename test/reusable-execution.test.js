@@ -528,3 +528,45 @@ test(
     assert.equal(fs.existsSync(path.join(f.root, 'completed')), false)
   }
 )
+
+for (const reason of ['business-error', 'idle', 'max-runs']) {
+  test(
+    'Linux bounds hanging Sails shutdown during ' + reason + ' retirement',
+    { skip: process.platform !== 'linux', timeout: 15000 },
+    async (t) => {
+      const f = fixture(t, {
+        retirementTimeoutMs: 100,
+        idleTimeoutMs: reason === 'idle' ? 50 : 60000,
+        maxRuns: reason === 'max-runs' ? 1 : 100,
+        executionTimeoutMs: 10000
+      })
+      fs.writeFileSync(
+        path.join(f.root, 'config/shutdown.js'),
+        "module.exports={beforeShutdown:function(done){require('node:fs').writeFileSync('lowering-'+process.pid,'yes')}}"
+      )
+      let firstPid
+      if (reason === 'business-error') {
+        const first = await f.run()
+        firstPid = first.result.value.pid
+        const error = await f.run({ mode: 'throw' }).catch((e) => e)
+        assert.equal(error.code, 'E_QUEST_WORKER_BUSINESS_ERROR')
+        assert.equal(error.outcome, 'failed')
+        assert.equal(error.cancellationConfirmed, true)
+        assert.match(error.message, /synthetic business failure/)
+      } else {
+        firstPid = (await f.run()).result.value.pid
+      }
+      const deadline = Date.now() + 5000
+      while (f.context.runtime.workerPool.slots.size && Date.now() < deadline)
+        await delay(10)
+      assert.equal(f.context.runtime.workerPool.slots.size, 0)
+      assert.equal(f.context.running.size, 0)
+      assert.ok(fs.existsSync(path.join(f.root, 'lowering-' + firstPid)))
+      assert.throws(() => process.kill(firstPid, 0), { code: 'ESRCH' })
+      const next = await f.run({ key: 'after-retirement' })
+      assert.notEqual(next.result.value.pid, firstPid)
+      assert.equal(next.result.value.models, 1)
+      assert.equal(next.success, true)
+    }
+  )
+}

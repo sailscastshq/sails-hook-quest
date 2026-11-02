@@ -68,8 +68,9 @@ undispatched requests receive an explicit outcome, not a fabricated execution.
 
 ### Migration from 0.0.9
 
-This is a breaking execution-default change intended for a new release, **not a
-silent patch to published 0.0.9**. To retain fresh CLI execution application-wide:
+The next early-stage **patch release changes the execution default** from
+published 0.0.9. This is a compatibility change despite the patch version;
+review each job before upgrading. To retain fresh CLI execution application-wide:
 
 ```js
 module.exports.quest = { execution: 'isolated' }
@@ -458,3 +459,10 @@ MIT
 ---
 
 Built with ❤️ by [The Sailscasts Company](https://sailscasts.com)
+
+Graceful child retirement is bounded separately from job execution. Configure
+`quest.worker.retirementTimeoutMs` (default 5,000 ms, maximum 300,000 ms) for
+Sails shutdown hooks. On Linux a hung idle, run-limit or business-error shutdown
+is terminated only with verified process-tree ownership and native close.
+Unconfirmed termination quarantines capacity rather than starting replacement
+work; a known business failure is preserved and is never automatically replayed.

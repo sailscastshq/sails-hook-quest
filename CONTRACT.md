@@ -181,3 +181,10 @@ side effects or guarantee termination of arbitrary daemons that deliberately
 remove run identity; jobs using those patterns must not advertise this guarantee.
 
 Owned process descendants inherit a separate `QUEST_OWNED_RUN_ID` marker. The child-only FD/result contract is still removed before business code runs, so ordinary descendants do not try to read their parent’s result descriptors. A descendant that removes the ownership marker leaves group cancellation unconfirmed.
+
+Graceful child retirement is bounded separately from job execution. Configure
+`quest.worker.retirementTimeoutMs` (default 5,000 ms, maximum 300,000 ms) for
+Sails shutdown hooks. On Linux a hung idle, run-limit or business-error shutdown
+is terminated only with verified process-tree ownership and native close.
+Unconfirmed termination quarantines capacity rather than starting replacement
+work; a known business failure is preserved and is never automatically replayed.
