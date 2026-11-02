@@ -43,11 +43,12 @@ function fixture(t, source) {
   fs.writeFileSync(path.join(appPath, 'scripts', 'fixture.js'), source)
   const job = {
     name: 'fixture',
+    execution: 'isolated',
     withoutOverlapping: true,
     inputSchema: require(path.join(appPath, 'scripts', 'fixture.js')).inputs
   }
   const context = {
-    config: { appPath },
+    config: { appPath, execution: 'isolated' },
     running: new Map(),
     runtime: resident.createRuntime(),
     stdout: sink(),
@@ -303,9 +304,10 @@ test('loader retains original renamed script and sanitized machine metadata', as
 }) => {
   const f = fixture(
     t,
-    `module.exports={friendlyName:'Renamed fixture',inputs:{count:{type:'number',defaultsTo:0,min:0},secretToken:{type:'string',defaultsTo:'hidden',example:'hidden',custom:()=>true}},quest:{name:'public-job',interval:'1 hour'},fn:async()=>0}`
+    `module.exports={friendlyName:'Renamed fixture',inputs:{count:{type:'number',defaultsTo:0,min:0},secretToken:{type:'string',defaultsTo:'hidden',example:'hidden',custom:()=>true}},quest:{execution:'isolated',name:'public-job',interval:'1 hour'},fn:async()=>0}`
   )
   const config = {
+    execution: 'isolated',
     appPath: f.appPath,
     jobs: [{ name: 'fixture', inputs: { count: 3 } }]
   }
@@ -427,12 +429,12 @@ test('actual resident Sails app owns scheduling, manual admission, pause and met
   )
   fs.writeFileSync(
     path.join(appPath, 'scripts', 'resident.js'),
-    `module.exports={friendlyName:'Resident fixture',inputs:{wait:{type:'number',defaultsTo:250}},quest:{interval:100},fn:async function({wait}){await new Promise(r=>setTimeout(r,wait));return {count:0}}}`
+    `module.exports={friendlyName:'Resident fixture',inputs:{wait:{type:'number',defaultsTo:250}},quest:{execution:'isolated',interval:100},fn:async function({wait}){await new Promise(r=>setTimeout(r,wait));return {count:0}}}`
   )
   fs.mkdirSync(path.join(appPath, 'config'))
   fs.writeFileSync(
     path.join(appPath, 'config', 'quest.js'),
-    'module.exports.quest={autoStart:false}'
+    "module.exports.quest={execution:'isolated',autoStart:false}"
   )
   fs.writeFileSync(
     path.join(appPath, 'config', 'hooks.js'),
@@ -461,7 +463,7 @@ test('actual resident Sails app owns scheduling, manual admission, pause and met
           orm: require('sails-hook-orm'),
           grunt: false
         },
-        quest: { autoStart: false },
+        quest: { execution: 'isolated', autoStart: false },
         globals: { sails: true, _: false, async: false, models: false }
       },
       (error) => (error ? reject(error) : resolve())
@@ -532,9 +534,12 @@ test('scheduled input metadata separates effective values from schema and manual
 }) => {
   const f = fixture(
     t,
-    `module.exports={friendlyName:'Scheduled inputs',habitat:'none',inputs:{count:{type:'number',defaultsTo:0},enabled:{type:'boolean'},payload:{type:'json'},requiredValue:{type:'string',required:true},secretToken:{type:'string',defaultsTo:'schema-secret'}},quest:{inputs:{count:99,enabled:false,payload:null,secretToken:'configured-secret'}},fn:async inputs=>inputs}`
+    `module.exports={friendlyName:'Scheduled inputs',habitat:'none',inputs:{count:{type:'number',defaultsTo:0},enabled:{type:'boolean'},payload:{type:'json'},requiredValue:{type:'string',required:true},secretToken:{type:'string',defaultsTo:'schema-secret'}},quest:{execution:'isolated',inputs:{count:99,enabled:false,payload:null,secretToken:'configured-secret'}},fn:async inputs=>inputs}`
   )
-  const jobs = await loader.loadJobs({ appPath: f.appPath })
+  const jobs = await loader.loadJobs({
+    execution: 'isolated',
+    appPath: f.appPath
+  })
   const job = jobs.get('fixture')
   const metadata = resident.metadata(
     {
@@ -583,7 +588,7 @@ test('resident restart resets runtime identity/pause, while dropped events have 
   const { fork } = require('node:child_process')
   const f = fixture(
     t,
-    `module.exports={friendlyName:'Restart fixture',habitat:'none',inputs:{delay:{type:'number',defaultsTo:10}},quest:{interval:10000},fn:async({delay})=>{await new Promise(resolve=>setTimeout(resolve,delay));return {count:0}}}`
+    `module.exports={friendlyName:'Restart fixture',habitat:'none',inputs:{delay:{type:'number',defaultsTo:10}},quest:{execution:'isolated',interval:10000},fn:async({delay})=>{await new Promise(resolve=>setTimeout(resolve,delay));return {count:0}}}`
   )
   fs.mkdirSync(path.join(f.appPath, 'config'))
   fs.writeFileSync(
@@ -593,7 +598,7 @@ test('resident restart resets runtime identity/pause, while dropped events have 
   const runner = path.join(f.appPath, 'resident-runner.js')
   fs.writeFileSync(
     runner,
-    `const app=new(require('sails').Sails)();let deliver=true;const hook=require(${JSON.stringify(path.resolve('lib'))});for(const event of ['start','complete','error']) app.on('quest:job:'+event,data=>{if(deliver)process.send({event,data})});app.load({appPath:__dirname,environment:'console',log:{level:'silent'},globals:false,hooks:{quest:hook,orm:require('sails-hook-orm'),grunt:false,session:false},quest:{autoStart:false}},error=>{if(error)throw error;process.send({ready:true});process.on('message',async({id,command})=>{try{let value;if(command==='runtime')value={runtime:app.quest.getRuntime(),job:app.quest.metadata('fixture'),hasReadRun:typeof app.quest.readRun==='function'};if(command==='pause')value=app.quest.pause('fixture');if(command==='drop')deliver=false;if(command==='run')value=await app.quest.run('fixture',{delay:20});if(command==='lower'){await new Promise(resolve=>app.lower(resolve));process.send({id,value:true});process.exit(0);return}process.send({id,value})}catch(error){process.send({id,error:error.message})}})})`
+    `const app=new(require('sails').Sails)();let deliver=true;const hook=require(${JSON.stringify(path.resolve('lib'))});for(const event of ['start','complete','error']) app.on('quest:job:'+event,data=>{if(deliver)process.send({event,data})});app.load({appPath:__dirname,environment:'console',log:{level:'silent'},globals:false,hooks:{quest:hook,orm:require('sails-hook-orm'),grunt:false,session:false},quest:{execution:'isolated',autoStart:false}},error=>{if(error)throw error;process.send({ready:true});process.on('message',async({id,command})=>{try{let value;if(command==='runtime')value={runtime:app.quest.getRuntime(),job:app.quest.metadata('fixture'),hasReadRun:typeof app.quest.readRun==='function'};if(command==='pause')value=app.quest.pause('fixture');if(command==='drop')deliver=false;if(command==='run')value=await app.quest.run('fixture',{delay:20});if(command==='lower'){await new Promise(resolve=>app.lower(resolve));process.send({id,value:true});process.exit(0);return}process.send({id,value})}catch(error){process.send({id,error:error.message})}})})`
   )
   const children = []
   t.after(() => {
@@ -683,6 +688,7 @@ test('config aliases keep original script/schema, source schedule, and per-job o
     `module.exports={friendlyName:'Config alias fixture',habitat:'none',inputs:{count:{type:'number',required:true},delay:{type:'number',defaultsTo:100}},fn:async({count,delay})=>{await new Promise(resolve=>setTimeout(resolve,delay));return {count}}}`
   )
   const config = {
+    execution: 'isolated',
     appPath: f.appPath,
     withoutOverlapping: true,
     jobs: [
@@ -731,11 +737,11 @@ test('autoStart source schedules belong only to the resident, never to its CLI j
 }) => {
   const f = fixture(
     t,
-    `module.exports={friendlyName:'Scheduler authority fixture',quest:{interval:10000},fn:async function(){await new Promise(resolve=>setImmediate(resolve));const app=this.sails;const snapshot={autoStart:app.config.quest.autoStart,registered:app.quest.metadata().filter(job=>job.scheduled).map(job=>job.name),otherHook:app.hooks.probe.marker};await new Promise(resolve=>setTimeout(resolve,1300));return snapshot}}`
+    `module.exports={friendlyName:'Scheduler authority fixture',quest:{execution:'isolated',interval:10000},fn:async function(){await new Promise(resolve=>setImmediate(resolve));const app=this.sails;const snapshot={autoStart:app.config.quest.autoStart,registered:app.quest.metadata().filter(job=>job.scheduled).map(job=>job.name),otherHook:app.hooks.probe.marker};await new Promise(resolve=>setTimeout(resolve,1300));return snapshot}}`
   )
   fs.writeFileSync(
     path.join(f.appPath, 'scripts', 'sentinel.js'),
-    `module.exports={friendlyName:'Bounded scheduler sentinel',habitat:'none',quest:{timeout:800},fn:async()=>{require('fs').appendFileSync('sentinel-fired','sentinel\\n');return true}}`
+    `module.exports={friendlyName:'Bounded scheduler sentinel',habitat:'none',quest:{execution:'isolated',timeout:800},fn:async()=>{require('fs').appendFileSync('sentinel-fired','sentinel\\n');return true}}`
   )
   fs.mkdirSync(path.join(f.appPath, 'config'))
   const hookPath = process.env.QUEST_REPRO_BASELINE || path.resolve('lib')
@@ -784,7 +790,7 @@ test('autoStart source schedules belong only to the resident, never to its CLI j
           grunt: false,
           session: false
         },
-        quest: { autoStart: true }
+        quest: { execution: 'isolated', autoStart: true }
       },
       (error) => (error ? reject(error) : resolve())
     )
@@ -859,9 +865,12 @@ test('metadata distinguishes loaded empty schema from unloaded dynamic definitio
 }) => {
   const f = fixture(
     t,
-    `module.exports={friendlyName:'Empty schema fixture',habitat:'none',quest:{interval:10000},fn:async()=>true}`
+    `module.exports={friendlyName:'Empty schema fixture',habitat:'none',quest:{execution:'isolated',interval:10000},fn:async()=>true}`
   )
-  const jobs = await loader.loadJobs({ appPath: f.appPath })
+  const jobs = await loader.loadJobs({
+    execution: 'isolated',
+    appPath: f.appPath
+  })
   loader.addJobDefinition({ name: 'dynamic-unloaded' }, jobs)
   const context = {
     jobs,
@@ -942,7 +951,7 @@ test('resident metadata retains bounded malformed schedule diagnostics and hones
           orm: require('sails-hook-orm'),
           grunt: false
         },
-        quest: { autoStart: false, jobs: definitions },
+        quest: { execution: 'isolated', autoStart: false, jobs: definitions },
         globals: { sails: true, _: false, async: false, models: false }
       },
       (error) => (error ? reject(error) : resolve())
@@ -1150,7 +1159,7 @@ test('actual owned CLI child reports observed signal termination without cancell
 function nativeLiftFixture(t, config) {
   const f = fixture(
     t,
-    `module.exports={friendlyName:'Lift ready fixture',quest:{interval:100000},fn:async()=>true}`
+    `module.exports={friendlyName:'Lift ready fixture',quest:{execution:'isolated',interval:100000},fn:async()=>true}`
   )
   fs.writeFileSync(
     path.join(f.appPath, 'package.json'),
@@ -1309,7 +1318,7 @@ test('actual resident manually runs a JSON string while its source schedule rema
 }) => {
   const f = fixture(
     t,
-    `module.exports={friendlyName:'Invalid schedule manual fixture',habitat:'none',inputs:{payload:{type:'json'}},quest:{interval:'not a valid interval'},fn:async inputs=>inputs.payload}`
+    `module.exports={friendlyName:'Invalid schedule manual fixture',habitat:'none',inputs:{payload:{type:'json'}},quest:{execution:'isolated',interval:'not a valid interval'},fn:async inputs=>inputs.payload}`
   )
   const app = new (require('sails').Sails)()
   t.after(async () => {
@@ -1329,7 +1338,7 @@ test('actual resident manually runs a JSON string while its source schedule rema
           grunt: false,
           session: false
         },
-        quest: { autoStart: true }
+        quest: { execution: 'isolated', autoStart: true }
       },
       (error) => (error ? reject(error) : resolve())
     )

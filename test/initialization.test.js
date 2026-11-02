@@ -49,7 +49,7 @@ function fixture(t, overrides = {}) {
         session: false,
         sockets: false
       },
-      quest: { autoStart: false },
+      quest: { execution: 'isolated', autoStart: false },
       hookTimeout: 2000,
       ...overrides
     }
@@ -85,7 +85,9 @@ for (const reduced of [false, true]) {
 test('database-free initialization preserves source autoStart and cleans up its timer', async ({
   t
 }) => {
-  const { app, config } = fixture(t, { quest: { autoStart: true } })
+  const { app, config } = fixture(t, {
+    quest: { execution: 'isolated', autoStart: true }
+  })
   await new Promise((resolve, reject) =>
     app.load(config, (error) => (error ? reject(error) : resolve()))
   )
@@ -100,6 +102,7 @@ test('database-free initialization failure reaches the load callback without a p
 }) => {
   const { app, config } = fixture(t, {
     quest: {
+      execution: 'isolated',
       autoStart: false,
       jobs: [{ name: 'duplicate' }, { name: 'duplicate' }]
     }
@@ -122,7 +125,7 @@ test('database-free owned execution child suppresses source autoStart in its own
   t
 }) => {
   const { config } = fixture(t)
-  const script = `const {Sails}=require('sails');require('./lib/core/execution-child').markExecutionChild();const app=new Sails();const config=${JSON.stringify({ ...config, hooks: undefined, quest: { autoStart: true }, loadHooks: ['moduleloader', 'userconfig', 'userhooks', 'quest'] })};config.hooks={quest:require('./lib'),orm:false};app.load(config,async error=>{if(error)throw error;const metadata=app.quest.metadata('fixture');const result={autoStart:app.config.quest.autoStart,scheduled:metadata.scheduled,runtimeId:app.quest.getRuntime().runtimeId};await new Promise(resolve=>app.lower(resolve));console.log(JSON.stringify(result))})`
+  const script = `const {Sails}=require('sails');require('./lib/core/execution-child').markExecutionChild();const app=new Sails();const config=${JSON.stringify({ ...config, hooks: undefined, quest: { execution: 'isolated', autoStart: true }, loadHooks: ['moduleloader', 'userconfig', 'userhooks', 'quest'] })};config.hooks={quest:require('./lib'),orm:false};app.load(config,async error=>{if(error)throw error;const metadata=app.quest.metadata('fixture');const result={autoStart:app.config.quest.autoStart,scheduled:metadata.scheduled,runtimeId:app.quest.getRuntime().runtimeId};await new Promise(resolve=>app.lower(resolve));console.log(JSON.stringify(result))})`
   const { stdout } = await promisify(execFile)(
     process.execPath,
     ['-e', script],
