@@ -17,6 +17,98 @@ Elegant job scheduling for Sails.js applications. Run scheduled tasks with full 
 npm install sails-hook-quest
 ```
 
+## Reusable Sails execution (next breaking release)
+
+Normal jobs reuse a **separate, fully initialized Sails process**, not the web
+application process. Existing script `fn` implementations keep their models,
+helpers, configuration, datastore connections, typed inputs and named exits.
+There is one active run per child, with a bounded FIFO queue across child slots.
+No additional scheduler or Redis service is needed.
+
+```js
+// Your existing job stays a Sails script. No execution option is required.
+module.exports = {
+  friendlyName: 'Process pending tasks',
+  quest: {
+    interval: '1 minute',
+    when: async ({ sails }) =>
+      (
+        await sails.models.task
+          .find({ status: 'queued' })
+          .select(['id'])
+          .limit(1)
+      ).length > 0
+  },
+  fn: async function () {
+    // Atomically claim and process a bounded batch using your existing helpers.
+    return sails.helpers.tasks.processPending()
+  }
+}
+```
+
+`when` is an optional **read-only scheduled hint**. False emits a `no_work` skip;
+a rejected query is an admission error. Manual `sails.quest.run()` calls bypass
+only this hint, not input validation, pause, overlap or capacity controls. A read
+deadline does not cancel a query: its admission lock remains until the read
+settles. Jobs must still claim records atomically and make external side effects
+idempotent. Predicate results grant no permissions.
+
+```js
+// Optional capacity policy; these are the defaults.
+module.exports.quest = {
+  worker: { concurrency: 1, maxQueued: 32, maxRuns: 100, idleTimeoutMs: 60000 }
+}
+```
+
+Children start lazily, retire after the configured run count and exit after an
+idle minute. A warm child retains its Sails memory/connection pool; this trades a
+bounded memory floor for fewer cold starts. Queued requests are volatile and
+bounded, not a durable business queue. Queue timeout defaults to 60 seconds;
+undispatched requests receive an explicit outcome, not a fabricated execution.
+
+### Migration from 0.0.9
+
+The next early-stage **patch release changes the execution default** from
+published 0.0.9. This is a compatibility change despite the patch version;
+review each job before upgrading. To retain fresh CLI execution application-wide:
+
+```js
+module.exports.quest = { execution: 'isolated' }
+```
+
+Or set `execution: 'isolated'` inside one script's `quest` definition. This is the
+right choice for jobs that require a fresh module cache, use `process.exit()` or
+`process.argv`, mutate process-wide state, leave unawaited background work, or
+need exact CLI stream behavior or a custom `sailsPath` runner. Static detection cannot establish compatibility.
+Reusable scripts must await all work; their module/global state persists until
+that child retires. Normal default jobs still run outside the HTTP process.
+
+No new execution deadline is imposed by default. Set `executionTimeoutMs` on a
+job (or under `quest.worker`) when a runtime budget is appropriate; the existing
+job `timeout` option continues to mean **schedule once after a delay**. On Linux,
+owned process-tree termination is verified before a timed-out child is replaced.
+Unknown termination quarantines its slot and retains overlap ownership; it never
+silently starts a replacement. Other platforms retain unconfirmed outcomes when
+forced termination cannot be proven. There is no automatic business replay.
+
+`await sails.quest.drain()` stops new admissions, reports queued requests as
+undispatched, waits for admitted work, and retires children. Sails' existing
+`beforeShutdown` callback is preserved and drain finishes before ORM teardown.
+Drain is a shutdown operation; use `stop()`/`start()` for reversible scheduling
+control. Deployments still need a sufficient platform termination grace period;
+an external hard kill cannot guarantee completion.
+
+Run receipts distinguish run identity from child generation. IPC acceptance is
+not proof of business completion. Cancellation never rolls back payments or
+emails. A confirmed natural result racing cancellation is retained; crash after
+dispatch without that result is interrupted/unknown. Retain application-level
+claims and reconcile uncertain external attempts before retrying.
+
+Live output uses bounded per-run snapshots; final logs and business results are
+bounded independently. Successful reused runs have `exitCode: null` because the
+Sails process remains alive. Fresh CLI runs keep their actual exit codes. See
+[CONTRACT.md](CONTRACT.md) for lifecycle details.
+
 ## Quick Start
 
 ### 1. Create a scheduled job
@@ -341,12 +433,18 @@ module.exports = {
 
 ## How It Works
 
-Quest leverages the existing `sails run` command to execute jobs. Each job runs as a separate Sails process with full access to your application's context. This approach provides:
+Quest's existing resident scheduler owns timers, pause/overlap state and run
+identities. For normal execution, a bounded pool reuses separately initialized
+Sails contexts. Explicit `execution: 'isolated'` launches the existing
+`sails run <script>` path with a fresh Sails process per job. Neither path runs
+business code in the web app. Execution children cannot register their own
+automatic schedules.
 
-1. **Full Sails context** - Models, helpers, and config work exactly as expected
-2. **Process isolation** - Jobs can't crash your main application
-3. **Simple implementation** - No complex worker thread communication
-4. **Familiar patterns** - Jobs are just Sails scripts with scheduling metadata
+Slipway's resident bridge continues to operate the authoritative scheduler.
+Hook integrations must recognize Quest's process-local execution-child marker
+before publishing app/Quest/Helm runtimes; a worker app with HTTP disabled alone
+does not eliminate cold starts. Existing applications need the corresponding
+Slipway-hook compatibility update before adopting reusable execution.
 
 ## License
 
@@ -361,3 +459,10 @@ MIT
 ---
 
 Built with ❤️ by [The Sailscasts Company](https://sailscasts.com)
+
+Graceful child retirement is bounded separately from job execution. Configure
+`quest.worker.retirementTimeoutMs` (default 5,000 ms, maximum 300,000 ms) for
+Sails shutdown hooks. On Linux a hung idle, run-limit or business-error shutdown
+is terminated only with verified process-tree ownership and native close.
+Unconfirmed termination quarantines capacity rather than starting replacement
+work; a known business failure is preserved and is never automatically replayed.

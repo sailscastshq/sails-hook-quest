@@ -36,7 +36,12 @@ test('default execution retains final logs without emitting opt-in live events',
       sails,
       stdout: sink,
       stderr: sink,
-      config: { appPath, sailsPath: runner, runtimeControls: false }
+      config: {
+        execution: 'isolated',
+        appPath,
+        sailsPath: runner,
+        runtimeControls: false
+      }
     }
   )
   assert.equal(result.success, true)
@@ -100,7 +105,7 @@ async function observedFixture(t, body) {
     running,
     stdout: sink,
     stderr: sink,
-    config: { appPath, runtimeControls: true }
+    config: { execution: 'isolated', appPath, runtimeControls: true }
   }
   const execution = executeJob('observed', job, {}, context).catch(
     (error) => error
@@ -334,7 +339,12 @@ test(
         running: new Map(),
         stdout: sink(),
         stderr: sink(),
-        config: { appPath, runtimeControls: true, logBytes: 1024 }
+        config: {
+          execution: 'isolated',
+          appPath,
+          runtimeControls: true,
+          logBytes: 1024
+        }
       }
     )
     const outcome = execution.catch((error) => error)
@@ -650,7 +660,11 @@ test(
             session: false,
             sockets: false
           },
-          quest: { autoStart: false, runtimeControls: true },
+          quest: {
+            execution: 'isolated',
+            autoStart: false,
+            runtimeControls: true
+          },
           globals: { sails: false, _: false, async: false, models: false }
         },
         (error) => (error ? reject(error) : resolve())

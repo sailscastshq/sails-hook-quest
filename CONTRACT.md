@@ -1,5 +1,63 @@
 # Resident Quest contract (v1)
 
+## Next breaking release: reusable Sails children
+
+The default execution mode becomes `worker`: a lazily initialized separate Sails
+process with one active run per child. `execution: 'isolated'` on a job, or global
+`config.quest.execution = 'isolated'`, preserves the released 0.0.9 CLI path.
+This default change must receive an explicit release/version migration; it is
+not compatible with silently replacing published 0.0.9 artifacts.
+
+The existing public `run()` API and synchronous manual start/admission identity
+remain. A worker start can be queued or booting; it does not assert that the
+business function has begun. Default capacity is one child plus 32 waiting
+requests, with FIFO fairness. One job's overlap lock covers admission, waiting,
+execution and unconfirmed termination. Application/database atomic claims remain
+necessary across replicas and after crashes. There is no distributed scheduler,
+durable worker queue, automatic retry or exactly-once external side-effect claim.
+
+`when({sails,inputs,name})` is an optional scheduled-only read predicate receiving
+validated/defaulted inputs. Errors, invalid answers and deadlines are visible
+pre-start admission failures, distinct from a false/no-work result. A deadline
+retains the in-flight read lock until that read actually settles. Pause, drain
+and overlap are rechecked after asynchronous admission. Manual runs bypass only
+this hint. Predicate functions are never included in public metadata.
+
+Worker IPC packets must match both runId and child generation. Ready/accepted or
+send callback success is not completion. Each run has bounded output/result
+transport and uses the application's installed machine runner with Whelk's
+`analogOrClassical` semantics, metadata and named exits. Success has no process
+exit (`exitCode: null`). Stale packets and controls cannot affect a later run.
+A business exception retires that child before admitting a replacement.
+
+No execution deadline is added by default. Configured `executionTimeoutMs` is
+separate from the legacy schedule `timeout` option. Cancellation/timeout retires
+only the owning slot. Linux uses existing PID/start/group/UID ownership evidence;
+sending a signal or observing `child.killed` is insufficient. A slot is not
+reused until process-tree termination and native close are confirmed. If proof
+is unavailable, the slot is quarantined and overlap stays held. A valid natural
+result racing cancellation is retained after confirmation; an unknown crash is
+not replayed. Cancellation does not undo a completed external effect.
+
+Workers preserve full source-configured Sails models/helpers/config and their
+own module/global state. They never share the web app's JavaScript heap.
+Reentrant jobs must await all work. Legacy argv/exit/fresh-state scripts use
+isolated mode. Children retire after 100 runs or 60 seconds idle by default.
+Queue/start/drain bounds do not imply cancellation of unresolved operations.
+`drain()` rejects waiting requests as known not dispatched, completes admitted
+work within the grace budget and then retires children before Sails ORM teardown.
+The existing beforeShutdown callback remains in the chain.
+
+Quest marks owned execution children with the process-local, non-enumerable
+`Symbol.for('sails.quest.executionChild') === true` before loading Sails. This
+marker is not an environment variable and does not propagate to grandchildren.
+It grants no permissions. Consumers such as Slipway use it to suppress duplicate
+resident services while preserving the normal hook/helper context.
+
+The remainder's fresh-process, CLI and numeric exit-code guarantees apply to
+explicit isolated mode. Shared identity/input/result/metadata limits continue
+to apply to both modes.
+
 This contract is introduced in Quest 0.0.6 for upstream issue [#13](https://github.com/sailscastshq/sails-hook-quest/issues/13), based on the previous v0.0.5 source (`3588713`). Probe `getRuntime().contractVersion` and capabilities; released v0.0.5 has none of these new APIs.
 
 ## Resident metadata
@@ -57,7 +115,7 @@ These are raw effective scheduled values under the existing precedence `job.inpu
 
 ## Execution and events
 
-The existing signature remains `await sails.quest.run('job-name', inputs)` and returns a receipt array. Multiple names and omitted names retain their existing behavior. Admission checks pause/overlap, validates bounded JSON input and loaded machine schemas without executing business logic, and starts the owned `sails run` child. For source-loaded registered jobs, required/type/custom/unknown-key failures reject before the synchronous start event and before any child is spawned. Ad-hoc scripts or dynamically added jobs lacking loaded schema retain child-side validation; they must not be advertised as supporting full preflight admission. The child's installed Sails/whelk machine runner also validates before invoking the script, using exact typed input through a dedicated pipe. Actual machine output, including named exits, crosses another pipe; stdout is never parsed as a result.
+The existing signature remains `await sails.quest.run('job-name', inputs)` and returns a receipt array. Multiple names and omitted names retain their existing behavior. Admission checks pause/overlap, validates bounded JSON input and loaded machine schemas without executing business logic, and selects the configured execution mode. Explicit isolated mode starts the owned `sails run` child. For source-loaded registered jobs, required/type/custom/unknown-key failures reject before the synchronous start event and before any child is spawned. Ad-hoc scripts or dynamically added jobs lacking loaded schema retain child-side validation; they must not be advertised as supporting full preflight admission. The child's installed Sails/whelk machine runner also validates before invoking the script, using exact typed input through a dedicated pipe. Actual machine output, including named exits, crosses another pipe; stdout is never parsed as a result.
 
 Subscribe to `quest:job:start` before calling `run` to capture the synchronous admission run ID before the child starts. Existing start/complete/error event names and payload fields remain. They gain `runId`, `runtimeId`, `sequence`, `startedAt`, and `trigger: 'manual' | 'scheduled'`; `manual` means public/programmatic `run()`, not an actor or a dashboard attribution; both timer paths supply `scheduled` explicitly. Skips, rejected errors and receipts carry the same trigger; terminal events gain `finishedAt`. Sequence increases across this resident runtime. Skips have a new `quest:job:skip` event and an identified receipt. Admission/validation failures return a rejected Promise (the public `run()` does not synchronously throw), with `error.code: 'E_QUEST_ADMISSION_REJECTED'`, `admission: 'rejected_before_start'`, and `phase: 'validation'`. The original Sails code, such as `E_INVALID_ARGINS`, is retained as `validationCode`. They reject without spawning and have no start event; the error event carries the same admission marker and `error.admissionCode`/`validationCode`. A transport error without this verified marker must not be inferred to be preflight rejection.
 
@@ -123,3 +181,10 @@ side effects or guarantee termination of arbitrary daemons that deliberately
 remove run identity; jobs using those patterns must not advertise this guarantee.
 
 Owned process descendants inherit a separate `QUEST_OWNED_RUN_ID` marker. The child-only FD/result contract is still removed before business code runs, so ordinary descendants do not try to read their parent’s result descriptors. A descendant that removes the ownership marker leaves group cancellation unconfirmed.
+
+Graceful child retirement is bounded separately from job execution. Configure
+`quest.worker.retirementTimeoutMs` (default 5,000 ms, maximum 300,000 ms) for
+Sails shutdown hooks. On Linux a hung idle, run-limit or business-error shutdown
+is terminated only with verified process-tree ownership and native close.
+Unconfirmed termination quarantines capacity rather than starting replacement
+work; a known business failure is preserved and is never automatically replayed.

@@ -66,7 +66,12 @@ test('failed jobs keep live output and emit bounded diagnostics', async ({
       { name: 'send-issue-notifications' },
       {},
       {
-        config: { appPath, sailsPath: runnerPath, diagnosticTailBytes: 1024 },
+        config: {
+          execution: 'isolated',
+          appPath,
+          sailsPath: runnerPath,
+          diagnosticTailBytes: 1024
+        },
         stdout: output,
         stderr: output
       }

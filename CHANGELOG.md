@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Patch release compatibility notice: changed execution default
+
+- Although the next release is a patch at this early stage, it changes the execution default. Review the migration notes and use `execution: 'isolated'` where fresh-process behavior is required.
+- Bound idle, run-limit and business-error retirement even if Sails shutdown hangs; preserve known business outcomes and quarantine unconfirmed termination.
+- Normal jobs reuse a separate, fully initialized Sails context with bounded FIFO capacity. Fresh CLI mode remains available per job or application using `execution: 'isolated'`.
+- Add scheduled read-only `when` admission, truthful empty/error/deadline outcomes, and no-work child suppression without slowing polling schedules.
+- Add generation-bound per-run results/logs, guarded cancellation/timeouts, retirement, idle recycling and Sails shutdown draining. Unknown external work is never automatically replayed.
+- Requires a compatible Slipway hook to recognize execution children without registering duplicate resident services. Full context and module state persist per child; migration review is required before release.
+
 - Owned CLI jobs instantiate their script machine after Sails setup, preventing the false missing-await warning during slow app loading. Exact JSON inputs, Sails metadata, business exits and result capture remain intact; real script warnings and errors remain visible.
 
 ## 0.0.8

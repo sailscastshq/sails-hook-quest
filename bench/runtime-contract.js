@@ -72,7 +72,7 @@ async function run(executor, mode) {
         ).inputs
       },
       { mode },
-      { config: { appPath }, stdout: sink, stderr: sink }
+      { config: { appPath, execution: 'isolated' }, stdout: sink, stderr: sink }
     )
   } catch (error) {
     if (mode !== 'error') throw error
